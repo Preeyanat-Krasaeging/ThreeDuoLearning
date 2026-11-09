@@ -4,8 +4,14 @@ import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_tts/flutter_tts.dart';
-import 'package:audioplayers/audioplayers.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+
+import '../../../services/coin_balance.dart';
+import '../../../services/guess_progress_service.dart' show GuessCoinResult;
+import '../../../services/market_service.dart';
+import '../../../services/user_account_preferences.dart';
+import '../../../widgets/parent_pin_prompt.dart';
+import '../../../services/sfx.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -18,29 +24,25 @@ Future<void> main() async {
 }
 
 // ==========================================
-// จำนวนด่าน: 5 โลก x 10 ด่าน = 50 ด่าน (ด่านที่ 10 ของแต่ละโลกคือ BOSS)
+// จำนวนด่าน: 28 ด่าน (ทุกด่านที่ 7, 14, 21, 28 คือด่านบอส)
+// (ใช้ "ชุด" ละ 7 ด่านภายในเพื่อไล่ความยาก ไม่ได้แสดงเป็นโลกแล้ว)
 // ==========================================
-const int kLevelsPerWorld = 10;
-const int kWorldCount = 5;
+const int kLevelsPerWorld = 7;
+const int kWorldCount = 4;
 const int kTotalLevels = kLevelsPerWorld * kWorldCount;
 
 // ==========================================
-// Progress (ดาว / ด่าน / ไอเทม / คอมโบ) — บันทึกลงเครื่องด้วย SharedPreferences
+// Progress (ดาว / ด่าน / สมุดสะสม) — แยกตามบัญชี เก็บในเครื่องและบนเซิร์ฟเวอร์
 // ==========================================
 
-/// เก็บความคืบหน้าทั้งหมดของผู้เล่นเป็น JSON ก้อนเดียว (key: progress_v2)
-/// เซฟเก่าที่มี 20 ด่านจะถูกโหลดต่อได้ ด่านที่เพิ่มมาจะเริ่มที่ 0 ดาว
-class ProgressStore extends ChangeNotifier with WidgetsBindingObserver {
-  static const String _saveKey = 'progress_v2';
-
+/// ความคืบหน้าของบัญชีที่ล็อกอินอยู่ (ดาว 28 ด่าน ด่านที่ปลดล็อก สติกเกอร์ที่สะสม)
+/// เก็บในเครื่องแยกตามบัญชีและบนเซิร์ฟเวอร์ (MarketStateSync) ลบแอปแล้วไม่หาย
+class ProgressStore extends ChangeNotifier {
   final List<int> stars = List<int>.filled(kTotalLevels, 0);
 
   int maxUnlockedLevel = 1; // ด่านสูงสุดที่ปลดล็อก
-  int maxCombo = 0; // คอมโบสูงสุดตลอดกาล
-  final Map<String, int> remainingItems = {}; // ไอเทมคงเหลือ/สะสม (itemId -> จำนวน)
-
-  Future<void>? _loading;
-  Future<void> _saveChain = Future<void>.value();
+  final Map<String, int> remainingItems = {}; // สติกเกอร์ที่สะสม (itemId -> จำนวน)
+  Set<int> unfinished = {}; // ด่านที่เล่นค้างไว้ (ป้าย "ต่อ")
 
   int get totalStars => stars.fold(0, (a, b) => a + b);
   int get clearedLevels => stars.where((s) => s > 0).length;
@@ -59,22 +61,42 @@ class ProgressStore extends ChangeNotifier with WidgetsBindingObserver {
 
   // ---------- Load ----------
 
-  /// เรียกซ้ำได้อย่างปลอดภัย (โหลดจริงครั้งเดียว)
-  Future<void> load() => _loading ??= _loadInternal();
+  void _setDefaults() {
+    for (int i = 0; i < kTotalLevels; i++) {
+      stars[i] = 0;
+    }
+    maxUnlockedLevel = 1;
+    remainingItems.clear();
+    unfinished = {};
+  }
 
-  Future<void> _loadInternal() async {
+  /// โหลดของบัญชีที่ล็อกอินอยู่ (เรียกทุกครั้งที่เปิดเกม บัญชีอื่นจะไม่เห็นข้อมูลกัน)
+  Future<void> load() async {
+    if (CoinBalance.value.value == null) CoinBalance.refresh();
+    _setDefaults();
     try {
-      WidgetsBinding.instance.addObserver(this);
-    } catch (_) {}
-
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      final raw = prefs.getString(_saveKey);
-      if (raw != null) {
-        _applyJson(jsonDecode(raw));
+      final local = await MarketStateSync.loadLocal();
+      if (local != null) {
+        _applyJson(local);
       } else {
-        await _migrateLegacy(prefs);
+        // เล่นไว้กับเวอร์ชันเก่า (เก็บในเครื่องแบบไม่แยกบัญชี): ย้ายเข้าบัญชีนี้
+        final old = await _claimOldProgress();
+        if (old != null) {
+          _applyJson(old);
+          _sanitize();
+          await MarketStateSync.save(_toJson());
+        }
       }
+      // บนเซิร์ฟเวอร์ใหม่กว่า (ลบแอปแล้วลงใหม่ / เล่นอีกเครื่อง)?
+      final server = await MarketStateSync.pull().timeout(const Duration(seconds: 4), onTimeout: () => null);
+      if (server != null) _applyJson(server);
+      await MarketResume.sync().timeout(const Duration(seconds: 4), onTimeout: () {});
+      final result = <int>{};
+      for (int level = 1; level <= kTotalLevels; level++) {
+        final r = await MarketResume.load(level, customers: LevelConfig.forLevel(level).customers);
+        if (r != null) result.add(level);
+      }
+      unfinished = result;
     } catch (e) {
       debugPrint('ProgressStore.load failed: $e');
     }
@@ -84,14 +106,11 @@ class ProgressStore extends ChangeNotifier with WidgetsBindingObserver {
 
   void _applyJson(dynamic data) {
     if (data is! Map) return;
-
     final s = data['stars'];
     for (int i = 0; i < kTotalLevels; i++) {
       stars[i] = (s is List && i < s.length) ? _asInt(s[i]) : 0;
     }
     maxUnlockedLevel = _asInt(data['maxUnlockedLevel'], 1);
-    maxCombo = _asInt(data['maxCombo']);
-
     remainingItems.clear();
     final items = data['items'];
     if (items is Map) {
@@ -102,41 +121,38 @@ class ProgressStore extends ChangeNotifier with WidgetsBindingObserver {
     }
   }
 
-  /// ย้ายข้อมูลจากเวอร์ชันเก่าที่เก็บเป็นหลาย key
-  Future<void> _migrateLegacy(SharedPreferences prefs) async {
+  /// ข้อมูลจากเวอร์ชันเก่า (key: progress_v2 หรือเก่ากว่านั้น) ให้บัญชีแรกที่เปิดเกมในเครื่องนี้
+  Future<Map<String, dynamic>?> _claimOldProgress() async {
+    final userId = await UserAccountPreferences.currentUserId();
+    if (userId == null) return null;
+    final prefs = await SharedPreferences.getInstance();
+    final doneKey = UserAccountPreferences.keyFor('market_old_checked', userId);
+    if (prefs.getBool(doneKey) ?? false) return null;
+    await prefs.setBool(doneKey, true);
+    final raw = prefs.getString('progress_v2');
     final legacyStars = prefs.getStringList('level_stars');
     final legacyItemKeys = prefs.getStringList('inventory_keys');
-    final hasLegacy = legacyStars != null ||
-        legacyItemKeys != null ||
-        prefs.containsKey('max_unlocked_level') ||
-        prefs.containsKey('max_combo');
-    if (!hasLegacy) return;
-
-    for (int i = 0; i < kTotalLevels; i++) {
-      stars[i] = (legacyStars != null && i < legacyStars.length)
-          ? (int.tryParse(legacyStars[i]) ?? 0)
-          : 0;
+    if (raw == null && legacyStars == null && legacyItemKeys == null &&
+        !prefs.containsKey('max_unlocked_level')) {
+      return null;
     }
-    maxUnlockedLevel = prefs.getInt('max_unlocked_level') ?? 1;
-    maxCombo = prefs.getInt('max_combo') ?? 0;
-
-    remainingItems.clear();
-    for (final key in legacyItemKeys ?? const <String>[]) {
-      final n = prefs.getInt('inventory_item_$key') ?? 0;
-      if (n > 0) remainingItems[key] = n;
+    if (!await UserAccountPreferences.claimLegacyData('market_old_owner', userId)) return null;
+    if (raw != null) {
+      try {
+        final j = jsonDecode(raw);
+        if (j is Map) return Map<String, dynamic>.from(j);
+      } catch (_) {}
     }
-
-    _sanitize();
-    final ok = await prefs.setString(_saveKey, jsonEncode(_toJson()));
-    if (ok) {
-      await prefs.remove('level_stars');
-      await prefs.remove('max_unlocked_level');
-      await prefs.remove('max_combo');
-      await prefs.remove('inventory_keys');
-      for (final key in legacyItemKeys ?? const <String>[]) {
-        await prefs.remove('inventory_item_$key');
-      }
-    }
+    return {
+      'stars': [
+        for (int i = 0; i < kTotalLevels; i++)
+          legacyStars != null && i < legacyStars.length ? (int.tryParse(legacyStars[i]) ?? 0) : 0,
+      ],
+      'maxUnlockedLevel': prefs.getInt('max_unlocked_level') ?? 1,
+      'items': {
+        for (final key in legacyItemKeys ?? const <String>[]) key: prefs.getInt('inventory_item_$key') ?? 0,
+      },
+    };
   }
 
   /// กันข้อมูลเพี้ยน/ติดลบ และให้ด่านที่ปลดล็อกสอดคล้องกับดาวที่มี
@@ -144,15 +160,12 @@ class ProgressStore extends ChangeNotifier with WidgetsBindingObserver {
     for (int i = 0; i < kTotalLevels; i++) {
       stars[i] = min(3, max(0, stars[i]));
     }
-    maxCombo = max(0, maxCombo);
-
     int floorLevel = 1;
     for (int i = 0; i < kTotalLevels; i++) {
       if (stars[i] > 0) floorLevel = max(floorLevel, min(kTotalLevels, i + 2));
     }
     maxUnlockedLevel = min(kTotalLevels, max(floorLevel, max(1, maxUnlockedLevel)));
-
-    remainingItems.removeWhere((_, v) => v <= 0);
+    remainingItems.removeWhere((id, v) => v <= 0 || !kAllMarketItems.any((i) => i.id == id));
   }
 
   static int _asInt(Object? v, [int fallback = 0]) => v is num ? v.toInt() : fallback;
@@ -160,73 +173,23 @@ class ProgressStore extends ChangeNotifier with WidgetsBindingObserver {
   // ---------- Save ----------
 
   Map<String, dynamic> _toJson() => {
-        'version': 2,
-        'stars': stars,
+        'stars': List<int>.of(stars),
         'maxUnlockedLevel': maxUnlockedLevel,
-        'maxCombo': maxCombo,
-        'items': remainingItems,
+        'items': Map<String, int>.of(remainingItems),
       };
 
-  /// ถ่ายภาพข้อมูล ณ ตอนที่เรียก แล้วต่อคิวเขียนลงเครื่อง (เรียงลำดับเสมอ)
-  Future<void> _save() {
-    final snapshot = jsonEncode(_toJson());
-    _saveChain = _saveChain.then((_) async {
-      try {
-        final prefs = await SharedPreferences.getInstance();
-        await prefs.setString(_saveKey, snapshot);
-      } catch (e) {
-        debugPrint('ProgressStore.save failed: $e');
-      }
-    });
-    return _saveChain;
-  }
+  Future<void> _save() => MarketStateSync.save(_toJson());
 
-  /// บังคับบันทึกทันที (ใช้ก่อนออกจากแอปได้)
+  /// บังคับบันทึกทันที
   Future<void> saveNow() => _save();
-
-  @override
-  void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state != AppLifecycleState.resumed) {
-      _save();
-    }
-  }
-
-  @override
-  void dispose() {
-    WidgetsBinding.instance.removeObserver(this);
-    super.dispose();
-  }
 
   // ---------- Mutations ----------
 
-  /// ส่งของสำเร็จ 1 ออเดอร์: อัปเดตคอมโบ + ไอเทม แล้วบันทึกครั้งเดียว
-  void recordDelivery({
-    required Map<String, int> items,
-    required int combo,
-  }) {
-    if (combo > maxCombo) maxCombo = combo;
+  /// ส่งของสำเร็จ 1 ออเดอร์: เก็บสินค้าเข้าสมุดสะสม แล้วบันทึก
+  void recordDelivery({required Map<String, int> items}) {
     items.forEach((id, count) {
       if (count > 0) remainingItems[id] = (remainingItems[id] ?? 0) + count;
     });
-    notifyListeners();
-    _save();
-  }
-
-  void updateMaxCombo(int currentCombo) {
-    if (currentCombo > maxCombo) {
-      maxCombo = currentCombo;
-      notifyListeners();
-      _save();
-    }
-  }
-
-  void updateItemCount(String itemId, int delta) {
-    final updated = max(0, (remainingItems[itemId] ?? 0) + delta);
-    if (updated == 0) {
-      remainingItems.remove(itemId);
-    } else {
-      remainingItems[itemId] = updated;
-    }
     notifyListeners();
     _save();
   }
@@ -235,22 +198,20 @@ class ProgressStore extends ChangeNotifier with WidgetsBindingObserver {
     if (level < 1 || level > kTotalLevels) return;
     final s = min(3, max(0, earnedStars));
     if (s > stars[level - 1]) stars[level - 1] = s;
-
     if (s > 0 && level < kTotalLevels && (level + 1) > maxUnlockedLevel) {
       maxUnlockedLevel = level + 1;
     }
-
     notifyListeners();
     _save();
   }
 
+  void markUnfinished(int level, bool on) {
+    final changed = on ? unfinished.add(level) : unfinished.remove(level);
+    if (changed) notifyListeners();
+  }
+
   Future<void> reset() async {
-    for (int i = 0; i < stars.length; i++) {
-      stars[i] = 0;
-    }
-    maxUnlockedLevel = 1;
-    maxCombo = 0;
-    remainingItems.clear();
+    _setDefaults();
     notifyListeners();
     await _save();
   }
@@ -581,31 +542,9 @@ class Pulse extends StatefulWidget {
 }
 
 class _PulseState extends State<Pulse> with SingleTickerProviderStateMixin {
-  late final AnimationController _c;
-
+  // ไม่มีอนิเมชันแล้ว: แสดง child นิ่งๆ
   @override
-  void initState() {
-    super.initState();
-    _c = AnimationController(vsync: this, duration: const Duration(milliseconds: 900))..repeat(reverse: true);
-  }
-
-  @override
-  void dispose() {
-    _c.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return AnimatedBuilder(
-      animation: _c,
-      child: widget.child,
-      builder: (context, child) => Transform.scale(
-        scale: 1 + widget.amount * Curves.easeInOut.transform(_c.value),
-        child: child,
-      ),
-    );
-  }
+  Widget build(BuildContext context) => widget.child;
 }
 
 /// แถวดาว 3 ดวง
@@ -788,7 +727,7 @@ const List<String> kCategoryOrder = ['Vegetables', 'Fruits', 'Fresh', 'Drinks', 
 const Map<String, CategoryStyle> kCategoryStyles = {
   'Vegetables': CategoryStyle(label: 'ผักสด', emoji: '🥦', color: Color(0xFF10B981), light: Color(0xFFD1FAE5)),
   'Fruits': CategoryStyle(label: 'ผลไม้', emoji: '🍎', color: Color(0xFFFF7A59), light: Color(0xFFFFE8E0)),
-  'Fresh': CategoryStyle(label: 'เนื้อ/ไข่', emoji: '🥩', color: Color(0xFFE11D48), light: Color(0xFFFFE4E6)),
+  'Fresh': CategoryStyle(label: 'เนื้อ / ไข่', emoji: '🥩', color: Color(0xFFE11D48), light: Color(0xFFFFE4E6)),
   'Drinks': CategoryStyle(label: 'เครื่องดื่ม', emoji: '🥤', color: Color(0xFF38BDF8), light: Color(0xFFE0F5FF)),
   'Snacks': CategoryStyle(label: 'ขนม', emoji: '🍿', color: Color(0xFFF5B301), light: Color(0xFFFFF4CC)),
   'Bakery': CategoryStyle(label: 'เบเกอรี่', emoji: '🍰', color: Color(0xFFF472B6), light: Color(0xFFFFE4F1)),
@@ -912,30 +851,6 @@ const List<CustomerModel> kCustomerList = [
     favoriteIds: ['egg', 'cheese', 'fish'],
   ),
   CustomerModel(
-    id: 'bunny',
-    name: 'กระต่ายน้อย',
-    englishName: 'Bella Bunny',
-    emoji: '🐰',
-    avatarBg: Color(0xFFFDE68A),
-    favoriteIds: ['carrot', 'strawberry', 'cake'],
-  ),
-  CustomerModel(
-    id: 'panda',
-    name: 'แพนด้าอ้วน',
-    englishName: 'Panda Pip',
-    emoji: '🐼',
-    avatarBg: Color(0xFFE2E8F0),
-    favoriteIds: ['cabbage', 'cookies', 'tea'],
-  ),
-  CustomerModel(
-    id: 'cat',
-    name: 'แมวเหมียว',
-    englishName: 'Kitty Kate',
-    emoji: '🐱',
-    avatarBg: Color(0xFFFFE4D6),
-    favoriteIds: ['fish', 'shrimp', 'milk'],
-  ),
-  CustomerModel(
     id: 'astronaut',
     name: 'นักบินอวกาศ',
     englishName: 'Captain Luna',
@@ -950,22 +865,6 @@ const List<CustomerModel> kCustomerList = [
     emoji: '🧙',
     avatarBg: Color(0xFFC7D2FE),
     favoriteIds: ['mushroom', 'pie', 'coffee'],
-  ),
-  CustomerModel(
-    id: 'robot',
-    name: 'หุ่นยนต์น้อย',
-    englishName: 'Robo Rob',
-    emoji: '🤖',
-    avatarBg: Color(0xFFBAE6FD),
-    favoriteIds: ['soda', 'chips', 'burger'],
-  ),
-  CustomerModel(
-    id: 'fairy',
-    name: 'นางฟ้าตัวจิ๋ว',
-    englishName: 'Fairy Faye',
-    emoji: '🧚',
-    avatarBg: Color(0xFFFBCFE8),
-    favoriteIds: ['cupcake', 'cherry', 'lollipop'],
   ),
 ];
 
@@ -991,7 +890,7 @@ class WorldStyle {
 
 const List<WorldStyle> kWorlds = [
   WorldStyle(
-    name: 'ตลาดสดสดใส',
+    name: 'ตลาดสดใส',
     subtitle: 'ฟังแล้วหยิบสินค้าให้ถูก',
     emoji: '🥬',
     color: Color(0xFF22C55E),
@@ -1016,7 +915,7 @@ const List<WorldStyle> kWorlds = [
   ),
   WorldStyle(
     name: 'หูทิพย์',
-    subtitle: 'ข้อความถูกซ่อน ต้องตั้งใจฟัง!',
+    subtitle: 'ข้อความถูกซ่อน ต้องตั้งใจฟัง !',
     emoji: '🎧',
     color: Color(0xFF3B82F6),
     dark: Color(0xFF1D4ED8),
@@ -1024,7 +923,7 @@ const List<WorldStyle> kWorlds = [
   ),
   WorldStyle(
     name: 'ราชาตลาด',
-    subtitle: 'ออเดอร์ยาว เวลาน้อย สุดท้าทาย!',
+    subtitle: 'ออเดอร์ยาว เวลาน้อย สุดท้าทาย !',
     emoji: '👑',
     color: Color(0xFF8B5CF6),
     dark: Color(0xFF6D28D9),
@@ -1039,7 +938,7 @@ WorldStyle worldOf(int level) => kWorlds[worldIndexOf(level)];
 bool isBossLevel(int level) => level % kLevelsPerWorld == 0;
 
 // ==========================================
-// Level configuration (50 ด่าน ยากขึ้นเรื่อยๆ)
+// Level configuration (28 ด่าน ยากขึ้นเรื่อยๆ)
 //   โลก 1 (1-10)  : พูดชื่อสินค้าตรงๆ       one tomato
 //   โลก 2 (11-20) : เพิ่มสี                 a red apple
 //   โลก 3 (21-30) : เพิ่มหน่วยนับ           a bottle of milk
@@ -1075,15 +974,15 @@ class LevelConfig {
 
   factory LevelConfig.forLevel(int n) {
     final int world = worldIndexOf(n);
-    final int step = (n - 1) % kLevelsPerWorld; // 0..9
+    final int step = (n - 1) % kLevelsPerWorld; // 0..6
     final bool boss = isBossLevel(n);
 
     final cats = <String>{'Vegetables', 'Fruits'};
-    if (n >= 3) cats.add('Drinks');
-    if (n >= 5) cats.add('Snacks');
-    if (n >= 7) cats.add('Bakery');
-    if (n >= 9) cats.add('Fresh');
-    if (n >= 12) cats.add('Meals');
+    if (n >= 2) cats.add('Drinks');
+    if (n >= 3) cats.add('Snacks');
+    if (n >= 4) cats.add('Bakery');
+    if (n >= 5) cats.add('Fresh');
+    if (n >= 7) cats.add('Meals');
 
     int items;
     switch (world) {
@@ -1103,13 +1002,13 @@ class LevelConfig {
         items = step < 3 ? 3 : 4;
     }
 
-    final OrderStyle style = n <= 10
+    final OrderStyle style = n <= 7
         ? OrderStyle.plain
-        : (n <= 20 ? OrderStyle.colorful : (n <= 30 ? OrderStyle.quantity : OrderStyle.mixed));
+        : (n <= 14 ? OrderStyle.colorful : (n <= 21 ? OrderStyle.quantity : OrderStyle.mixed));
 
-    final int maxCount = n < 5 ? 2 : (n < 25 ? 3 : 4);
+    final int maxCount = n < 3 ? 2 : (n < 15 ? 3 : 4);
 
-    // เวลารอของลูกค้า: ค่อยๆ ลดจาก x1.5 (ด่าน 1) เหลือ x0.85 (ด่าน 50) บวกเวลาตามจำนวนสินค้า
+    // เวลารอของลูกค้า: ค่อยๆ ลดจาก x1.5 (ด่าน 1) เหลือ x0.85 (ด่านสุดท้าย) บวกเวลาตามจำนวนสินค้า
     final double factor = 1.5 - (n - 1) * (0.65 / (kTotalLevels - 1));
     final double seconds = (24.0 + 9.0 * items) * factor * (boss ? 0.92 : 1.0);
 
@@ -1117,14 +1016,14 @@ class LevelConfig {
       level: n,
       world: world,
       isBoss: boss,
-      customers: 4 + n ~/ 7 + (boss ? 2 : 0),
+      customers: 4 + n ~/ 4 + (boss ? 2 : 0), // same formula on the server
       itemsPerOrder: items,
       maxCount: maxCount,
       style: style,
       categories: cats,
       seconds: seconds,
-      showIcons: n <= 8,
-      hideText: n >= 31,
+      showIcons: n <= 5,
+      hideText: n >= 18,
     );
   }
 }
@@ -1132,8 +1031,8 @@ class LevelConfig {
 // ==========================================
 // Shared dialog shell
 // ==========================================
-Widget appDialogShell({required Color borderColor, required Widget child}) {
-  return Dialog(
+Widget appDialogShell({required Color borderColor, required Widget child, bool lockBack = false}) {
+  final Widget dialog = Dialog(
     backgroundColor: Colors.transparent,
     insetPadding: const EdgeInsets.symmetric(horizontal: 18, vertical: 24),
     child: Container(
@@ -1151,6 +1050,8 @@ Widget appDialogShell({required Color borderColor, required Widget child}) {
       child: SingleChildScrollView(child: child),
     ),
   );
+  // กันปุ่ม Back ปิดหน้าต่างผลลัพธ์แล้วหน้าจอค้าง
+  return lockBack ? PopScope(canPop: false, child: dialog) : dialog;
 }
 
 // ==========================================
@@ -1164,8 +1065,11 @@ class LevelSelectScreen extends StatefulWidget {
 }
 
 class _LevelSelectScreenState extends State<LevelSelectScreen> {
+  bool _opening = false; // a level is being opened (no double taps)
   final ScrollController _scroll = ScrollController();
-  final List<GlobalKey> _worldKeys = List.generate(kWorldCount, (_) => GlobalKey());
+  static const int _perRow = 4;
+  static const int _rowCount = (kTotalLevels + _perRow - 1) ~/ _perRow;
+  final List<GlobalKey> _rowKeys = List.generate(_rowCount, (_) => GlobalKey());
 
   @override
   void initState() {
@@ -1181,21 +1085,90 @@ class _LevelSelectScreenState extends State<LevelSelectScreen> {
     super.dispose();
   }
 
-  /// เลื่อนไปยังโลกที่กำลังเล่นอยู่
+  /// เลื่อนไปยังแถวของด่านที่กำลังเล่นอยู่
   void _scrollToCurrent({bool animate = true}) {
-    final int w = worldIndexOf(gameProgress.nextLevel);
-    final ctx = _worldKeys[w].currentContext;
+    final int row = (gameProgress.nextLevel - 1) ~/ _perRow;
+    final ctx = _rowKeys[row].currentContext;
     if (ctx == null) return;
     Scrollable.ensureVisible(
       ctx,
       duration: animate ? const Duration(milliseconds: 500) : Duration.zero,
       curve: Curves.easeOutCubic,
-      alignment: 0.0,
+      alignment: 0.3,
+    );
+  }
+
+  /// ด่าน 1–28 ต่อกันเป็นทางเดียว (แถวคู่ไปทางขวา แถวคี่ย้อนกลับทางซ้าย)
+  Widget _levelPath(BuildContext context) {
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(28),
+        border: Border.all(color: const Color(0xFFE9D8AE), width: 4),
+        boxShadow: const [BoxShadow(color: Color(0x33000000), offset: Offset(0, 6), blurRadius: 12)],
+      ),
+      padding: const EdgeInsets.fromLTRB(14, 24, 14, 20),
+      child: LayoutBuilder(builder: (context, b) {
+        const double gap = 8;
+        const double rowGap = 24;
+        final double cw = (b.maxWidth - gap * (_perRow - 1)) / _perRow;
+        final double ch = cw * 1.2;
+        return SizedBox(
+          height: ch * _rowCount + rowGap * (_rowCount - 1),
+          child: Stack(
+            clipBehavior: Clip.none,
+            children: [
+              Positioned.fill(
+                child: CustomPaint(
+                  painter: _RoutePainter(cellW: cw, cellH: ch, gap: gap, rowGap: rowGap, rows: _rowCount, perRow: _perRow),
+                ),
+              ),
+              for (int r = 0; r < _rowCount; r++)
+                Positioned(
+                  key: _rowKeys[r],
+                  left: 0,
+                  top: r * (ch + rowGap),
+                  width: 1,
+                  height: ch,
+                  child: const SizedBox.shrink(),
+                ),
+              for (int i = 0; i < kTotalLevels; i++)
+                Positioned(
+                  left: ((i ~/ _perRow).isEven ? i % _perRow : _perRow - 1 - i % _perRow) * (cw + gap),
+                  top: (i ~/ _perRow) * (ch + rowGap),
+                  width: cw,
+                  height: ch,
+                  child: _tile(context, i + 1, worldOf(i + 1), cw, ch),
+                ),
+            ],
+          ),
+        );
+      }),
     );
   }
 
   Future<void> _play(BuildContext context, int level) async {
-    await Navigator.push(context, MaterialPageRoute(builder: (_) => MarketGameScreen(level: level)));
+    if (_opening) return;
+    _opening = true;
+    try {
+      final int customers = LevelConfig.forLevel(level).customers;
+      MarketRound? resume = await MarketResume.load(level, customers: customers);
+      if (resume != null) {
+        if (!context.mounted) return;
+        final bool? goOn = await _askMarketResume(context, level, resume, customers);
+        if (goOn == null) return;
+        if (!goOn) {
+          await MarketResume.clear(level);
+          gameProgress.markUnfinished(level, false);
+          resume = null;
+        }
+      }
+      if (!context.mounted) return;
+      final MarketRound? start = resume;
+      await Navigator.push(context, MaterialPageRoute(builder: (_) => MarketGameScreen(level: level, resume: start)));
+    } finally {
+      _opening = false;
+    }
     if (mounted) _scrollToCurrent();
   }
 
@@ -1205,7 +1178,7 @@ class _LevelSelectScreenState extends State<LevelSelectScreen> {
       ..showSnackBar(
         SnackBar(
           duration: const Duration(milliseconds: 1600),
-          content: Text('🔒 ผ่านด่าน ${level - 1} ก่อนนะ แล้วจะปลดล็อกด่านนี้!'),
+          content: Text('🔒 ผ่านด่าน ${level - 1} ก่อนนะ แล้วจะปลดล็อกด่านนี้ !'),
         ),
       );
   }
@@ -1218,17 +1191,16 @@ class _LevelSelectScreenState extends State<LevelSelectScreen> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Text('⚙️ ตั้งค่า',
+            const Text('ตั้งค่า',
                 style: TextStyle(fontSize: 24, fontWeight: FontWeight.w900, color: AppColors.purpleDark)),
             const SizedBox(height: 12),
             AnimatedBuilder(
               animation: gameProgress,
               builder: (context, _) => Column(
                 children: [
-                  _statRow('⭐', 'ดาวที่สะสม', '${gameProgress.totalStars}/${kTotalLevels * 3}'),
-                  _statRow('✅', 'ด่านที่ผ่านแล้ว', '${gameProgress.clearedLevels}/$kTotalLevels'),
-                  _statRow('🔥', 'คอมโบสูงสุด', '${gameProgress.maxCombo}'),
-                  _statRow('📖', 'สติกเกอร์ที่สะสม', '${collectedCount()}/${kAllMarketItems.length}'),
+                  _statRow('ดาวที่สะสม', '${gameProgress.totalStars} / ${kTotalLevels * 3}'),
+                  _statRow('ด่านที่ผ่านแล้ว', '${gameProgress.clearedLevels} / $kTotalLevels'),
+                  _statRow('สติกเกอร์ที่สะสม', '${collectedCount()} / ${kAllMarketItems.length}'),
                 ],
               ),
             ),
@@ -1241,12 +1213,15 @@ class _LevelSelectScreenState extends State<LevelSelectScreen> {
                 onPressed: () async {
                   final messenger = ScaffoldMessenger.of(ctx);
                   Navigator.pop(ctx);
+                  // ลบความคืบหน้าของเด็กได้เฉพาะผู้ปกครอง
+                  final allowed = await showParentPinPrompt(context, title: 'ผู้ปกครองยืนยันก่อนรีเซ็ต');
+                  if (!allowed) return;
                   await gameProgress.reset();
                   messenger.showSnackBar(
                     const SnackBar(content: Text('รีเซ็ตความคืบหน้าเรียบร้อยแล้ว')),
                   );
                 },
-                child: const Text('รีเซ็ตความคืบหน้าทั้งหมด'),
+                child: const Text('รีเซ็ตความคืบหน้าทั้งหมด (ใช้ PIN ผู้ปกครอง)'),
               ),
             ),
             const SizedBox(height: 10),
@@ -1265,15 +1240,13 @@ class _LevelSelectScreenState extends State<LevelSelectScreen> {
     );
   }
 
-  Widget _statRow(String emoji, String label, String value) {
+  Widget _statRow(String label, String value) {
     return Container(
       margin: const EdgeInsets.only(bottom: 6),
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
       decoration: BoxDecoration(color: const Color(0xFFF5F3FF), borderRadius: BorderRadius.circular(14)),
       child: Row(
         children: [
-          Text(emoji, style: const TextStyle(fontSize: 18)),
-          const SizedBox(width: 8),
           Expanded(child: Text(label, style: const TextStyle(fontWeight: FontWeight.w800, color: AppColors.ink))),
           Text(value, style: const TextStyle(fontWeight: FontWeight.w900, color: AppColors.purpleDark, fontSize: 16)),
         ],
@@ -1388,7 +1361,6 @@ class _LevelSelectScreenState extends State<LevelSelectScreen> {
   Widget _progressPill() {
     final int cleared = gameProgress.clearedLevels;
     final double frac = (cleared / kTotalLevels).clamp(0.0, 1.0).toDouble();
-    const List<String> strip = ['🥬', '🥛', '🥕', '🍅', '🍎', '🍑'];
     return Container(
       height: 40,
       decoration: BoxDecoration(
@@ -1420,15 +1392,9 @@ class _LevelSelectScreenState extends State<LevelSelectScreen> {
                 ),
               ),
             ),
-            Positioned(
-              right: 8,
-              child: Row(
-                children: [for (final e in strip) Text(e, style: const TextStyle(fontSize: 16))],
-              ),
-            ),
             Padding(
               padding: const EdgeInsets.only(left: 12),
-              child: Text('$cleared/$kTotalLevels',
+              child: Text('$cleared / $kTotalLevels',
                   style: const TextStyle(
                     fontSize: 14.5,
                     fontWeight: FontWeight.w900,
@@ -1597,7 +1563,7 @@ class _LevelSelectScreenState extends State<LevelSelectScreen> {
             border: Border.all(color: const Color(0xFFFFE0BF), width: 2),
             boxShadow: const [BoxShadow(color: Color(0xFFB4470A), offset: Offset(0, 3))],
           ),
-          child: const Text('เล่น!',
+          child: const Text('เล่น',
               style: TextStyle(
                   fontSize: 14,
                   fontWeight: FontWeight.w900,
@@ -1608,7 +1574,7 @@ class _LevelSelectScreenState extends State<LevelSelectScreen> {
       kids.add(const Positioned(
         right: -14,
         bottom: -18,
-        child: _Bobbing(dy: 4, child: Text('👈', style: TextStyle(fontSize: 26))),
+        child: _Bobbing(dy: 0, child: Text('', style: TextStyle(fontSize: 26))),
       ));
     }
     if (boss) {
@@ -1617,11 +1583,26 @@ class _LevelSelectScreenState extends State<LevelSelectScreen> {
         right: -9,
         child: Transform.rotate(
           angle: 0.4,
-          child: Opacity(opacity: unlocked ? 1 : 0.85, child: const Text('👑', style: TextStyle(fontSize: 22))),
+          child: Opacity(opacity: unlocked ? 1 : 0.85, child: const Text('', style: TextStyle(fontSize: 22))),
         ),
       ));
     }
 
+    if (unlocked && gameProgress.unfinished.contains(level)) {
+      kids.add(Positioned(
+        top: 0,
+        right: 0,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+          decoration: BoxDecoration(
+            color: AppColors.orangeDark,
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: Colors.white, width: 1.5),
+          ),
+          child: const Text('▶ ต่อ', style: TextStyle(fontSize: 9, fontWeight: FontWeight.w900, color: Colors.white)),
+        ),
+      ));
+    }
     Widget tile = Stack(clipBehavior: Clip.none, children: kids);
     if (isCurrent) tile = Pulse(amount: 0.05, child: tile);
 
@@ -1632,302 +1613,7 @@ class _LevelSelectScreenState extends State<LevelSelectScreen> {
     );
   }
 
-  // ---------- จุดเชื่อมระหว่างโลก ----------
-  Widget _connector(Color color) {
-    return Padding(
-      padding: const EdgeInsets.only(top: 2, bottom: 6),
-      child: Column(
-        children: [
-          for (int i = 0; i < 3; i++)
-            Container(
-              width: 8 - i * 1.0,
-              height: 8 - i * 1.0,
-              margin: const EdgeInsets.symmetric(vertical: 2.5),
-              decoration: BoxDecoration(color: color.withAlpha(170 - i * 35), shape: BoxShape.circle),
-            ),
-        ],
-      ),
-    );
-  }
-
-  // ---------- กุญแจทองติดโซ่ (ทับโลกที่ยังล็อก) ----------
-  Widget _bigPadlock() {
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Container(
-          width: 34,
-          height: 26,
-          decoration: BoxDecoration(
-            borderRadius: const BorderRadius.vertical(top: Radius.circular(18)),
-            border: Border.all(color: const Color(0xFFB8BFCC), width: 6),
-          ),
-        ),
-        Container(
-          width: 62,
-          height: 50,
-          alignment: Alignment.center,
-          decoration: BoxDecoration(
-            gradient: const LinearGradient(
-              begin: Alignment.topCenter,
-              end: Alignment.bottomCenter,
-              colors: [Color(0xFFFFE08A), Color(0xFFE0A526)],
-            ),
-            borderRadius: BorderRadius.circular(14),
-            border: Border.all(color: const Color(0xFF9A6A12), width: 3),
-            boxShadow: const [BoxShadow(color: Color(0x66000000), offset: Offset(0, 4), blurRadius: 5)],
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(
-                width: 13,
-                height: 13,
-                decoration: const BoxDecoration(color: Color(0xFF5B3A1E), shape: BoxShape.circle),
-              ),
-              Container(width: 5, height: 11, color: const Color(0xFF5B3A1E)),
-            ],
-          ),
-        ),
-      ],
-    );
-  }
-
   // ---------- การ์ดโลก ----------
-  Widget _worldCard(BuildContext context, int w) {
-    final WorldStyle world = kWorlds[w];
-    final int first = w * kLevelsPerWorld + 1;
-    final bool worldUnlocked = gameProgress.isUnlocked(first);
-
-    int earned = 0;
-    int cleared = 0;
-    for (int l = first; l < first + kLevelsPerWorld; l++) {
-      earned += gameProgress.stars[l - 1];
-      if (gameProgress.stars[l - 1] > 0) cleared++;
-    }
-    final Color headA = worldUnlocked ? Color.lerp(world.dark, const Color(0xFF4B6E62), 0.55)! : const Color(0xFFBBA9C6);
-    final Color headB = worldUnlocked ? Color.lerp(world.dark, const Color(0xFF3E6B5C), 0.7)! : const Color(0xFFD8C8DC);
-    final Color borderC = worldUnlocked ? world.color : const Color(0xFFD6C6E0);
-    final String sub = worldUnlocked ? world.subtitle : 'ผ่านด่าน ${first - 1} เพื่อปลดล็อกโลกนี้ 🔒';
-    final List<String> shelf = _crateFruit[w];
-
-    final Widget card = Container(
-      key: _worldKeys[w],
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(32),
-        border: Border.all(color: borderC, width: 4),
-        boxShadow: [
-          BoxShadow(color: borderC.withAlpha(60), offset: const Offset(0, 8), blurRadius: 14),
-          BoxShadow(color: borderC.withAlpha(150), offset: const Offset(0, 4)),
-        ],
-      ),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(27),
-        child: Column(
-          children: [
-            // ----- หัวการ์ด -----
-            Container(
-              padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
-              decoration: BoxDecoration(
-                gradient: LinearGradient(begin: Alignment.centerLeft, end: Alignment.centerRight, colors: [headA, headB]),
-              ),
-              child: Stack(
-                children: [
-                  // ชั้นวางผลไม้เป็นฉากหลัง
-                  Positioned(
-                    right: -6,
-                    top: -4,
-                    bottom: 14,
-                    width: 200,
-                    child: Opacity(
-                      opacity: worldUnlocked ? 0.7 : 0.35,
-                      child: Row(
-                        children: [
-                          for (int i = 0; i < 4; i++)
-                            Expanded(
-                              child: Container(
-                                margin: const EdgeInsets.symmetric(horizontal: 1.5),
-                                decoration: BoxDecoration(
-                                  color: const Color(0xFF8B5A2B),
-                                  border: Border.all(color: const Color(0xFF6B4220), width: 2),
-                                ),
-                                alignment: Alignment.center,
-                                child: FittedBox(
-                                  child: Text('${shelf[i]}${shelf[i]}', style: const TextStyle(fontSize: 18)),
-                                ),
-                              ),
-                            ),
-                        ],
-                      ),
-                    ),
-                  ),
-                  Column(
-                    children: [
-                      Row(
-                        children: [
-                          _Bobbing(
-                            dy: worldUnlocked ? 3 : 0,
-                            child: Container(
-                              width: 50,
-                              height: 50,
-                              alignment: Alignment.center,
-                              decoration: BoxDecoration(
-                                color: Colors.white,
-                                shape: BoxShape.circle,
-                                border: Border.all(color: const Color(0xFFE9D8AE), width: 3),
-                                boxShadow: [
-                                  BoxShadow(color: Colors.black.withAlpha(50), offset: const Offset(0, 3), blurRadius: 4),
-                                ],
-                              ),
-                              child: worldUnlocked
-                                  ? Text(world.emoji, style: const TextStyle(fontSize: 27))
-                                  : const Icon(Icons.lock_rounded, color: Color(0xFF94A3B8)),
-                            ),
-                          ),
-                          const SizedBox(width: 10),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text('โลก ${w + 1}: ${world.name}',
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: const TextStyle(
-                                      fontSize: 17.5,
-                                      fontWeight: FontWeight.w900,
-                                      color: Colors.white,
-                                      shadows: [Shadow(color: Color(0x88000000), offset: Offset(0, 2))],
-                                    )),
-                                Text(sub,
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: const TextStyle(
-                                      fontSize: 12,
-                                      fontWeight: FontWeight.w800,
-                                      color: Colors.white,
-                                      shadows: [Shadow(color: Color(0x88000000), offset: Offset(0, 1.5))],
-                                    )),
-                              ],
-                            ),
-                          ),
-                          Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
-                            decoration: BoxDecoration(
-                              color: _cream,
-                              borderRadius: BorderRadius.circular(16),
-                              border: Border.all(color: _brass, width: 2),
-                              boxShadow: const [BoxShadow(color: Color(0x33000000), offset: Offset(0, 2))],
-                            ),
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                const Icon(Icons.star_rounded, color: Color(0xFFFFB300), size: 15),
-                                const SizedBox(width: 2),
-                                Text('$earned/${kLevelsPerWorld * 3}',
-                                    style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w900, color: _woodDark)),
-                              ],
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 8),
-                      Align(
-                        alignment: Alignment.centerLeft,
-                        child: FractionallySizedBox(
-                          widthFactor: 0.55,
-                          child: Container(
-                            height: 9,
-                            decoration: BoxDecoration(
-                              color: Colors.black.withAlpha(60),
-                              borderRadius: BorderRadius.circular(8),
-                              border: Border.all(color: Colors.white.withAlpha(120), width: 1),
-                            ),
-                            child: Align(
-                              alignment: Alignment.centerLeft,
-                              child: FractionallySizedBox(
-                                widthFactor: max(0.0, cleared / kLevelsPerWorld),
-                                child: Container(
-                                  decoration: BoxDecoration(
-                                    color: const Color(0xFFFFE9B8),
-                                    borderRadius: BorderRadius.circular(8),
-                                  ),
-                                ),
-                              ),
-                            ),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-            // ----- ตารางลังด่าน -----
-            Container(
-              width: double.infinity,
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                  colors: [
-                    worldUnlocked ? const Color(0xFFE6F5E9) : const Color(0xFFF3ECF6),
-                    worldUnlocked ? const Color(0xFFF4FBF4) : const Color(0xFFFAF6FC),
-                  ],
-                ),
-              ),
-              padding: const EdgeInsets.fromLTRB(14, 28, 14, 20),
-              child: LayoutBuilder(builder: (context, b) {
-                const double gap = 8;
-                const double rowGap = 24;
-                final double cw = (b.maxWidth - gap * 4) / 5;
-                final double ch = cw * 1.2;
-                return SizedBox(
-                  height: ch * 2 + rowGap,
-                  child: Stack(
-                    clipBehavior: Clip.none,
-                    children: [
-                      Positioned.fill(
-                        child: CustomPaint(painter: _RoutePainter(cellW: cw, cellH: ch, gap: gap, rowGap: rowGap)),
-                      ),
-                      for (int i = 0; i < kLevelsPerWorld; i++)
-                        Positioned(
-                          left: (i % 5) * (cw + gap),
-                          top: (i ~/ 5) * (ch + rowGap),
-                          width: cw,
-                          height: ch,
-                          child: _tile(context, first + i, world, cw, ch),
-                        ),
-                    ],
-                  ),
-                );
-              }),
-            ),
-          ],
-        ),
-      ),
-    );
-
-    if (worldUnlocked) return card;
-    // โลกที่ยังล็อก: มีโซ่พาดและกุญแจทองทับ
-    return Stack(
-      children: [
-        card,
-        Positioned.fill(
-          child: IgnorePointer(
-            child: Stack(
-              alignment: Alignment.center,
-              children: [
-                const Positioned.fill(child: CustomPaint(painter: _ChainPainter(inset: 0.1, big: true))),
-                _bigPadlock(),
-              ],
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-
   Widget _bookButton() {
     return GestureDetector(
       onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const CollectionScreen())),
@@ -1965,7 +1651,7 @@ class _LevelSelectScreenState extends State<LevelSelectScreen> {
                   borderRadius: BorderRadius.circular(10),
                   border: Border.all(color: _wood, width: 1.5),
                 ),
-                child: Text('${collectedCount()}/${kAllMarketItems.length}',
+                child: Text('${collectedCount()} / ${kAllMarketItems.length}',
                     style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w900, color: _woodDark)),
               ),
             ),
@@ -2012,14 +1698,7 @@ class _LevelSelectScreenState extends State<LevelSelectScreen> {
                           controller: _scroll,
                           physics: const BouncingScrollPhysics(),
                           padding: const EdgeInsets.fromLTRB(14, 6, 14, 18),
-                          child: Column(
-                            children: [
-                              for (int w = 0; w < kWorldCount; w++) ...[
-                                _worldCard(context, w),
-                                if (w < kWorldCount - 1) _connector(const Color(0xFFB59A7A)),
-                              ],
-                            ],
-                          ),
+                          child: _levelPath(context),
                         ),
                       ),
                       Container(
@@ -2064,7 +1743,6 @@ class _LevelSelectScreenState extends State<LevelSelectScreen> {
                                               color: Colors.white,
                                               shadows: [Shadow(color: Color(0x66000000), offset: Offset(0, 2))])),
                                       const SizedBox(width: 6),
-                                      Text(worldOf(next).emoji, style: const TextStyle(fontSize: 22)),
                                     ],
                                   ),
                                 ),
@@ -2129,20 +1807,35 @@ class _DiamondBgPainter extends CustomPainter {
 // เส้นประเชื่อมลังด่าน
 class _RoutePainter extends CustomPainter {
   final double cellW, cellH, gap, rowGap;
-  const _RoutePainter({required this.cellW, required this.cellH, required this.gap, required this.rowGap});
+  final int rows;
+  final int perRow;
+  const _RoutePainter({
+    required this.cellW,
+    required this.cellH,
+    required this.gap,
+    required this.rowGap,
+    required this.rows,
+    required this.perRow,
+  });
 
   @override
   void paint(Canvas canvas, Size size) {
-    final double y1 = cellH * 0.74;
-    final double y2 = cellH + rowGap + cellH * 0.74;
     final double x0 = cellW / 2;
-    final double x4 = 4 * (cellW + gap) + cellW / 2;
-    final Path path = Path()
-      ..moveTo(x0, y1)
-      ..lineTo(x4, y1)
-      ..moveTo(x0, y1)
-      ..lineTo(x0, y2)
-      ..lineTo(x4, y2);
+    final double x4 = (perRow - 1) * (cellW + gap) + cellW / 2;
+    final Path path = Path();
+    for (int r = 0; r < rows; r++) {
+      final double y = r * (cellH + rowGap) + cellH * 0.74;
+      path
+        ..moveTo(x0, y)
+        ..lineTo(x4, y);
+      if (r < rows - 1) {
+        // ทางลงไปแถวถัดไป: ด้านขวาสำหรับแถวคู่ ด้านซ้ายสำหรับแถวคี่
+        final double x = r.isEven ? x4 : x0;
+        path
+          ..moveTo(x, y)
+          ..lineTo(x, y + cellH + rowGap);
+      }
+    }
     final Paint p = Paint()
       ..style = PaintingStyle.stroke
       ..strokeCap = StrokeCap.round
@@ -2158,7 +1851,7 @@ class _RoutePainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(covariant _RoutePainter old) => old.cellW != cellW || old.cellH != cellH;
+  bool shouldRepaint(covariant _RoutePainter old) => old.cellW != cellW || old.cellH != cellH || old.rows != rows;
 }
 
 // เส้นไม้ในลัง + หัวตะปู
@@ -2214,7 +1907,11 @@ class _MiniAwningPainter extends CustomPainter {
 class _ChainPainter extends CustomPainter {
   final double inset;
   final bool big;
-  const _ChainPainter({this.inset = 0, this.big = false});
+  const _ChainPainter({
+    this.inset = 0,
+    // ignore: unused_element_parameter
+    this.big = false,
+  });
 
   void _chain(Canvas canvas, Offset a, Offset b) {
     final double len = (b - a).distance;
@@ -2355,29 +2052,79 @@ class _FloorPainter extends CustomPainter {
   bool shouldRepaint(covariant _FloorPainter old) => old.a != a || old.b != b;
 }
 
+/// "ด่าน 3 เล่นค้างไว้ … เล่นต่อ / เริ่มใหม่": true = go on, false = start again.
+Future<bool?> _askMarketResume(BuildContext context, int level, MarketRound r, int customers) {
+  return showDialog<bool>(
+    context: context,
+    builder: (ctx) => appDialogShell(
+      borderColor: AppColors.orange,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text('ด่าน $level เล่นค้างไว้',
+              style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w900, color: AppColors.orangeDark)),
+          const SizedBox(height: 8),
+          Text(
+            'บริการลูกค้าไปแล้ว ${r.served} / $customers คน\nจะเล่นต่อเลยไหม ?',
+            textAlign: TextAlign.center,
+            style: const TextStyle(fontSize: 14, color: AppColors.ink),
+          ),
+          const SizedBox(height: 16),
+          SizedBox(
+            width: double.infinity,
+            child: ChunkyButton(
+              color: AppColors.green,
+              shadowColor: AppColors.greenDark,
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('เล่นต่อ'),
+            ),
+          ),
+          const SizedBox(height: 10),
+          SizedBox(
+            width: double.infinity,
+            child: ChunkyButton(
+              color: AppColors.orange,
+              shadowColor: AppColors.orangeDark,
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('เริ่มใหม่'),
+            ),
+          ),
+        ],
+      ),
+    ),
+  );
+}
+
 class MarketGameScreen extends StatefulWidget {
   final int level;
-  const MarketGameScreen({super.key, required this.level});
+
+  /// The level left in the middle, to continue (null = start it fresh).
+  final MarketRound? resume;
+
+  const MarketGameScreen({super.key, required this.level, this.resume});
 
   @override
   State<MarketGameScreen> createState() => _MarketGameScreenState();
 }
 
-class _MarketGameScreenState extends State<MarketGameScreen> with TickerProviderStateMixin {
+class _MarketGameScreenState extends State<MarketGameScreen>
+    with TickerProviderStateMixin, WidgetsBindingObserver {
   final FlutterTts _tts = FlutterTts();
-  final AudioPlayer _sfxPlayer = AudioPlayer();
+  bool _pausedByApp = false; // customer's patience stopped while the app is away
+  bool _askingExit = false; // "ออกจากด่านนี้" is on screen
+  VoidCallback? _afterExit; // what was waiting for the answer
+  bool _afterExitFinishes = false; // ...and it was the end of the level
+  final List<Future<GuessCoinResult>> _levelCoins = []; // real coins earned since the level was opened
   late final Future<void> _ttsInit;
 
   late final AnimationController _idleCtrl;
   late final AnimationController _walkCtrl;
   late final LevelConfig _cfg;
-  late final WorldStyle _world;
 
   // ผลของด่าน
   int _served = 0;
   int _successes = 0;
   int _mistakes = 0;
-  int _currentCombo = 0; // Combo ในรอบปัจจุบัน
 
   // ลูกค้าปัจจุบัน
   CustomerPhase _phase = CustomerPhase.entering;
@@ -2399,8 +2146,10 @@ class _MarketGameScreenState extends State<MarketGameScreen> with TickerProvider
   // ---- ลูกเล่นเพิ่มความสนุก ----
   String? _praise; // ป้ายชมเชยเด้งๆ บนเคาน์เตอร์
   Timer? _praiseTimer;
-  int _confettiSeq = 0;
-  bool _showConfetti = false;
+  // ignore: unused_field
+  final int _confettiSeq = 0;
+  // ignore: unused_field
+  final bool _showConfetti = false;
   Timer? _confettiTimer;
   bool _hintIcons = false; // เปิดคำใบ้
   int _newCollected = 0; // สติกเกอร์ใหม่ที่ได้ในด่านนี้
@@ -2419,13 +2168,13 @@ class _MarketGameScreenState extends State<MarketGameScreen> with TickerProvider
   void initState() {
     super.initState();
     _cfg = LevelConfig.forLevel(widget.level);
-    _world = worldOf(widget.level);
     _selectedCategoryTab = _availableCategories.first;
     _idleCtrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 1400))..repeat(reverse: true);
     _walkCtrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 1300));
     _ttsInit = _initTts();
+    WidgetsBinding.instance.addObserver(this);
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) _startLevel();
+      if (mounted) _startLevel(resume: widget.resume);
     });
   }
 
@@ -2446,17 +2195,36 @@ class _MarketGameScreenState extends State<MarketGameScreen> with TickerProvider
     _idleCtrl.dispose();
     _walkCtrl.dispose();
     _tts.stop();
-    _sfxPlayer.stop();
-    _sfxPlayer.dispose();
+    WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
 
-  // ---------- Sound ----------
-  void _playSound(String filename) async {
-    try {
-      await _sfxPlayer.stop();
-      await _sfxPlayer.play(AssetSource('sounds/$filename'));
-    } catch (_) {}
+  // ---------- หยุดเวลาตอนสลับแอป / มีสายเข้า ----------
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      if (_pausedByApp && mounted && _orderActive && !_askingExit) {
+        _pausedByApp = false;
+        _startPatienceTimer(); // goes on from the patience that was left
+      }
+    } else if (_orderActive && _patienceTimer != null && _patienceTimer!.isActive) {
+      _patienceTimer?.cancel();
+      _pausedByApp = true;
+    }
+  }
+
+  // ---------- เล่นต่อจากลูกค้าคนถัดไป (แยกตามบัญชี เก็บบนเซิร์ฟเวอร์) ----------
+  void _saveResume() {
+    MarketResume.save(
+      widget.level,
+      MarketRound(served: _served, successes: _successes, mistakes: _mistakes, collected: _newCollected),
+    );
+    gameProgress.markUnfinished(widget.level, true);
+  }
+
+  void _clearResume() {
+    MarketResume.clear(widget.level);
+    gameProgress.markUnfinished(widget.level, false);
   }
 
   Future<void> _say(String text) async {
@@ -2486,16 +2254,8 @@ class _MarketGameScreenState extends State<MarketGameScreen> with TickerProvider
     });
   }
 
-  void _celebrate() {
-    _confettiTimer?.cancel();
-    setState(() {
-      _confettiSeq++;
-      _showConfetti = true;
-    });
-    _confettiTimer = Timer(const Duration(milliseconds: 2100), () {
-      if (mounted) setState(() => _showConfetti = false);
-    });
-  }
+  // ปิดเอฟเฟกต์ริบบิ้น/คอนเฟตติ์ตอนส่งของแล้ว
+  void _celebrate() {}
 
   bool get _canHint => _orderActive && !_hintIcons && !_cfg.showIcons;
 
@@ -2506,7 +2266,7 @@ class _MarketGameScreenState extends State<MarketGameScreen> with TickerProvider
       _hintIcons = true;
       _textRevealed = true;
     });
-    _addFloatingCoin('💡 คำใบ้!', AppColors.purple);
+    _addFloatingCoin('คำใบ้', AppColors.purple);
     _speakOrder();
   }
 
@@ -2615,17 +2375,26 @@ class _MarketGameScreenState extends State<MarketGameScreen> with TickerProvider
   // ==========================================
   // Level / customer flow
   // ==========================================
-  void _startLevel() {
+  void _startLevel({MarketRound? resume}) {
     _patienceTimer?.cancel();
-    _served = 0;
-    _successes = 0;
-    _mistakes = 0;
-    _currentCombo = 0;
-    _newCollected = 0;
+    _pausedByApp = false;
+    _levelCoins.clear();
+    if (resume != null) {
+      _served = resume.served;
+      _successes = resume.successes;
+      _mistakes = resume.mistakes;
+      _newCollected = resume.collected;
+    } else {
+      _served = 0;
+      _successes = 0;
+      _mistakes = 0;
+      _newCollected = 0;
+      _clearResume(); // a new game of this level
+    }
     _lastCustomerId = null;
     _seenCustomers.clear();
     _spawnCustomer();
-    _showPraise(_cfg.isBoss ? '👑 BOSS LEVEL!' : '🏪 Store is OPEN!', ms: 1800);
+    _showPraise(_cfg.isBoss ? 'ด่านบอส' : (resume != null ? 'เปิดร้านต่อ' : 'ร้านเปิดแล้ว'), ms: 1800);
   }
 
   CustomerModel _pickCustomer(Random r) {
@@ -2719,6 +2488,13 @@ class _MarketGameScreenState extends State<MarketGameScreen> with TickerProvider
 
   void _startPatienceTimer() {
     _patienceTimer?.cancel();
+    // A customer who arrives while "ออกจากด่านนี้" is open, or while the app
+    // is in the background, waits: the clock starts when the child is back.
+    final AppLifecycleState? app = WidgetsBinding.instance.lifecycleState;
+    if (_askingExit || (app != null && app != AppLifecycleState.resumed)) {
+      _pausedByApp = true;
+      return;
+    }
     final step = 0.2 / _cfg.seconds;
     _patienceTimer = Timer.periodic(const Duration(milliseconds: 200), (timer) {
       if (!mounted || !_orderActive) {
@@ -2745,10 +2521,23 @@ class _MarketGameScreenState extends State<MarketGameScreen> with TickerProvider
       _walkCtrl.forward(from: 0).then((_) {
         if (!mounted || token != _arrivalId) return;
         _served++;
-        if (_served >= _cfg.customers) {
-          _finishLevel();
+        final bool done = _served >= _cfg.customers;
+        if (!done) _saveResume();
+        void goOn() {
+          if (!mounted) return;
+          if (done) {
+            _finishLevel();
+          } else {
+            _spawnCustomer();
+          }
+        }
+        // "ออกจากด่านนี้" is open: wait for the answer before the next
+        // customer / the result (no dialog on top of the question).
+        if (_askingExit) {
+          _afterExit = goOn;
+          _afterExitFinishes = done;
         } else {
-          _spawnCustomer();
+          goOn();
         }
       });
     });
@@ -2759,8 +2548,13 @@ class _MarketGameScreenState extends State<MarketGameScreen> with TickerProvider
     if (!_orderActive) return;
     setState(() => _basket[item.id] = (_basket[item.id] ?? 0) + 1);
     HapticFeedback.selectionClick();
-    _playSound('pop.mp3');
     _speakItem(item); // แตะแล้วออกเสียงคำศัพท์ให้เด็กฟัง
+  }
+
+  // ถังขยะ: ล้างสินค้าในตะกร้าทั้งหมด (กรณีกดผิดหลายชิ้น)
+  void _clearBasket() {
+    if (!_orderActive || _basket.isEmpty) return;
+    setState(() => _basket.clear());
   }
 
   void _removeItemFromBasket(String itemId) {
@@ -2792,23 +2586,27 @@ class _MarketGameScreenState extends State<MarketGameScreen> with TickerProvider
   }
 
   void _onOrderSuccess() {
+    Sfx.correct();
     _patienceTimer?.cancel();
     _orderActive = false;
     _successes++;
 
-    _currentCombo++;
     final bool fav = _targetOrder.any((r) => _currentCustomer.favoriteIds.contains(r.item.id));
     final List<MarketItem> newItems =
         _targetOrder.map((r) => r.item).where((i) => (gameProgress.remainingItems[i.id] ?? 0) <= 0).toList();
     gameProgress.recordDelivery(
       items: {for (final req in _targetOrder) req.item.id: req.count},
-      combo: _currentCombo,
     );
-    _playSound('correct.mp3');
-    _addFloatingCoin('Combo x$_currentCombo! 🔥', AppColors.orange);
+    // Real coins: 2 per item per day (from the server).
+    final coins = [for (final req in _targetOrder) MarketCoins.submit(req.item.id)];
+    _levelCoins.addAll(coins);
+    Future.wait(coins).then((list) {
+      final got = list.fold<int>(0, (s, r) => s + r.coins);
+      if (mounted && got > 0) _addFloatingCoin('+$got เหรียญ', AppColors.orange);
+    });
     if (newItems.isNotEmpty) {
       _newCollected += newItems.length;
-      _addFloatingCoin('🆕 ${newItems.first.emoji} ${newItems.first.name}!', AppColors.purple);
+      _addFloatingCoin('สติกเกอร์ใหม่ ${newItems.first.name}', AppColors.purple);
     }
 
     setState(() {
@@ -2817,14 +2615,11 @@ class _MarketGameScreenState extends State<MarketGameScreen> with TickerProvider
       _feedbackColor = AppColors.greenDark;
     });
     _say('Thank you! Bye-bye!');
-    const List<String> words = ['Great!', 'Awesome!', 'Super!', 'Wow!', 'Yummy!', 'Perfect!'];
-    if (_currentCombo >= 3) {
-      _showPraise('🔥 Combo x$_currentCombo!');
-      if (_currentCombo % 3 == 0) _celebrate();
-    } else if (fav) {
-      _showPraise('💖 My favorite!');
+    const List<String> words = ['เก่งมาก', 'สุดยอด', 'เยี่ยมเลย', 'ถูกต้อง', 'เก่งจัง', 'ว้าว'];
+    if (fav) {
+      _showPraise('ของโปรดของลูกค้า');
     } else {
-      _showPraise('⭐ ${words[Random().nextInt(words.length)]}');
+      _showPraise(words[Random().nextInt(words.length)]);
     }
     if (newItems.isNotEmpty) _celebrate();
     _sendCustomerAway();
@@ -2844,9 +2639,8 @@ class _MarketGameScreenState extends State<MarketGameScreen> with TickerProvider
   }
 
   void _onOrderMistake() {
+    Sfx.wrong();
     _mistakes++;
-    _currentCombo = 0;
-    _playSound('wrong.mp3');
     setState(() {
       _reaction = '🤔';
       _feedback = _mismatchHint();
@@ -2864,9 +2658,8 @@ class _MarketGameScreenState extends State<MarketGameScreen> with TickerProvider
   }
 
   void _onPatienceTimeout() {
+    Sfx.wrong();
     _orderActive = false;
-    _currentCombo = 0;
-    _playSound('wrong.mp3');
     setState(() {
       _reaction = '😠';
       _feedback = "Too slow! I'm leaving.";
@@ -2886,13 +2679,13 @@ class _MarketGameScreenState extends State<MarketGameScreen> with TickerProvider
   }
 
   void _finishLevel() {
+    _clearResume();
     final stars = _calcStars();
     final passed = stars > 0;
     if (passed) {
       gameProgress.completeLevel(widget.level, stars);
-      _playSound('correct.mp3');
+      Sfx.complete();
     } else {
-      _playSound('wrong.mp3');
     }
     _showResult(stars, passed);
   }
@@ -2921,24 +2714,23 @@ class _MarketGameScreenState extends State<MarketGameScreen> with TickerProvider
 
   void _showResult(int stars, bool passed) {
     final hasNext = passed && widget.level < kTotalLevels;
-    final bool newWorld = passed && isBossLevel(widget.level) && widget.level < kTotalLevels;
     showDialog<void>(
       context: context,
       barrierDismissible: false,
       builder: (ctx) => appDialogShell(
+        lockBack: true,
         borderColor: passed ? AppColors.yellow : AppColors.orange,
         child: Stack(
           clipBehavior: Clip.none,
           alignment: Alignment.topCenter,
           children: [
-            if (passed) const Positioned(top: -10, child: ConfettiBurst()),
             Column(
               mainAxisSize: MainAxisSize.min,
               children: [
                 Text(
                   passed
-                      ? (_cfg.isBoss ? '👑 Boss Cleared! 🎉' : 'Level ${widget.level} Complete! 🎉')
-                      : 'Try again! 💪',
+                      ? (_cfg.isBoss ? 'ผ่านด่านบอสแล้ว' : 'ผ่านด่าน ${widget.level} แล้ว')
+                      : 'ลองใหม่อีกครั้งนะ',
                   textAlign: TextAlign.center,
                   style: TextStyle(
                       fontSize: 24,
@@ -2950,37 +2742,47 @@ class _MarketGameScreenState extends State<MarketGameScreen> with TickerProvider
                 const SizedBox(height: 8),
                 Text(
                   stars == 3
-                      ? 'สุดยอดไปเลย! เก่งมาก! 🌟'
+                      ? 'สุดยอดไปเลย เก่งมาก'
                       : (stars == 2
-                          ? 'เก่งมาก! เกือบเต็มแล้ว 👍'
-                          : (stars == 1 ? 'ผ่านแล้ว! ลองอีกครั้งเพื่อเก็บดาวเพิ่มนะ 💪' : 'ไม่เป็นไรนะ ลองใหม่ได้เสมอ! 🌈')),
+                          ? 'เก่งมาก เกือบเต็มแล้ว'
+                          : (stars == 1 ? 'ผ่านแล้ว ลองอีกครั้งเพื่อเก็บดาวเพิ่มนะ ' : 'ไม่เป็นไรนะ ลองใหม่ได้เสมอ')),
                   textAlign: TextAlign.center,
                   style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w900, color: AppColors.blueDark),
                 ),
-                if (newWorld)
-                  Padding(
-                    padding: const EdgeInsets.only(top: 6),
-                    child: Text(
-                      '🎊 ปลดล็อกโลกใหม่: ${kWorlds[worldIndexOf(widget.level + 1)].emoji} ${kWorlds[worldIndexOf(widget.level + 1)].name}',
-                      textAlign: TextAlign.center,
-                      style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w900, color: AppColors.pinkDark),
-                    ),
-                  ),
                 if (_newCollected > 0)
                   Padding(
                     padding: const EdgeInsets.only(top: 4),
-                    child: Text('🆕 ได้สติกเกอร์ใหม่ $_newCollected ชิ้น! ดูในสมุดสะสม 📖',
+                    child: Text('ได้สติกเกอร์ใหม่ $_newCollected ชิ้น ดูในสมุดสะสม',
                         textAlign: TextAlign.center,
                         style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w900, color: AppColors.purpleDark)),
                   ),
                 const SizedBox(height: 8),
-                Text(
-                  'Served $_successes of ${_cfg.customers} customers',
-                  style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w800, color: AppColors.ink),
-                ),
+               
                 const SizedBox(height: 4),
-                Text('🔥 High Combo: ${gameProgress.maxCombo}',
-                    style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w900, color: AppColors.purpleDark)),
+                FutureBuilder<List<GuessCoinResult>>(
+                  future: Future.wait(_levelCoins),
+                  builder: (_, snap) {
+                    final list = snap.data;
+                    final coins = list?.fold<int>(0, (s, r) => s + r.coins) ?? 0;
+                    final pending = list?.where((r) => r.pending).length ?? 0;
+                    final String text = list == null
+                        ? 'กำลังนับเหรียญ...'
+                        : pending > 0
+                            ? 'ได้ $coins เหรียญ (รอต่อเน็ต)'
+                            : coins > 0
+                                ? 'ได้ $coins เหรียญ'
+                                : 'สินค้ารอบนี้ได้เหรียญไปแล้ววันนี้';
+                    return Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(Icons.monetization_on_rounded, color: Color(0xFFFFB627), size: 20),
+                        const SizedBox(width: 4),
+                        Text(text,
+                            style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w900, color: AppColors.purpleDark)),
+                      ],
+                    );
+                  },
+                ),
                 if (!passed)
                   const Padding(
                     padding: EdgeInsets.only(top: 6),
@@ -2993,7 +2795,7 @@ class _MarketGameScreenState extends State<MarketGameScreen> with TickerProvider
                 if (passed && widget.level == kTotalLevels)
                   const Padding(
                     padding: EdgeInsets.only(top: 6),
-                    child: Text('คุณคือราชาตลาดตัวจริง! ผ่านครบทุกด่านแล้ว 🏆',
+                    child: Text('คุณคือราชาตลาดตัวจริง ผ่านครบทุกด่านแล้ว',
                         textAlign: TextAlign.center,
                         style: TextStyle(fontSize: 14, fontWeight: FontWeight.w900, color: AppColors.purpleDark)),
                   ),
@@ -3011,7 +2813,7 @@ class _MarketGameScreenState extends State<MarketGameScreen> with TickerProvider
                           MaterialPageRoute(builder: (_) => MarketGameScreen(level: widget.level + 1)),
                         );
                       },
-                      child: const Text('ด่านต่อไป ➔', style: TextStyle(fontSize: 18)),
+                      child: const Text('ด่านต่อไป', style: TextStyle(fontSize: 18)),
                     ),
                   ),
                 if (hasNext) const SizedBox(height: 10),
@@ -3024,7 +2826,7 @@ class _MarketGameScreenState extends State<MarketGameScreen> with TickerProvider
                       Navigator.pop(ctx);
                       _startLevel();
                     },
-                    child: const Text('เล่นอีกครั้ง 🔄'),
+                    child: const Text('เล่นอีกครั้ง'),
                   ),
                 ),
                 const SizedBox(height: 10),
@@ -3049,6 +2851,8 @@ class _MarketGameScreenState extends State<MarketGameScreen> with TickerProvider
   }
 
   Future<void> _confirmExit() async {
+    if (_askingExit) return;
+    _askingExit = true;
     _patienceTimer?.cancel();
     final leave = await showDialog<bool>(
       context: context,
@@ -3058,10 +2862,10 @@ class _MarketGameScreenState extends State<MarketGameScreen> with TickerProvider
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Text('ออกจากด่านนี้?',
+            const Text('ออกจากด่านนี้',
                 style: TextStyle(fontSize: 22, fontWeight: FontWeight.w900, color: AppColors.orangeDark)),
             const SizedBox(height: 8),
-            const Text('ความคืบหน้าในด่านนี้จะหายไปนะ',
+            const Text('กลับมาเล่นต่อจากลูกค้าคนถัดไปได้นะ',
                 textAlign: TextAlign.center, style: TextStyle(fontSize: 14, color: AppColors.ink)),
             const SizedBox(height: 16),
             SizedBox(
@@ -3087,10 +2891,24 @@ class _MarketGameScreenState extends State<MarketGameScreen> with TickerProvider
         ),
       ),
     );
+    _askingExit = false;
+    final VoidCallback? waiting = _afterExit;
+    final bool waitingFinish = _afterExitFinishes;
+    _afterExit = null;
+    _afterExitFinishes = false;
     if (!mounted) return;
     if (leave == true) {
+      // The last customer had just been served: keep the result.
+      if (waitingFinish) {
+        _clearResume();
+        final stars = _calcStars();
+        if (stars > 0) gameProgress.completeLevel(widget.level, stars);
+      }
       Navigator.pop(context);
+    } else if (waiting != null) {
+      waiting();
     } else if (_orderActive) {
+      _pausedByApp = false;
       _startPatienceTimer();
     }
   }
@@ -3117,6 +2935,17 @@ class _MarketGameScreenState extends State<MarketGameScreen> with TickerProvider
 
   @override
   Widget build(BuildContext context) {
+    // ปุ่ม Back ของเครื่องต้องถามยืนยันก่อนออก เหมือนปุ่มย้อนกลับบนหัวจอ
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop) _confirmExit();
+      },
+      child: _buildGameScaffold(context),
+    );
+  }
+
+  Widget _buildGameScaffold(BuildContext context) {
     return Scaffold(
       backgroundColor: const Color(0xFFE2BC82),
       body: _GameScaffoldBody(
@@ -3164,16 +2993,10 @@ class _MarketGameScreenState extends State<MarketGameScreen> with TickerProvider
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Text(_world.emoji, style: const TextStyle(fontSize: 20)),
           FittedBox(
             fit: BoxFit.scaleDown,
-            child: Text(_world.name,
-                style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w900, color: Color(0xFF4B3A1E))),
-          ),
-          FittedBox(
-            fit: BoxFit.scaleDown,
-            child: Text('Level ${widget.level}${_cfg.isBoss ? ' 👑' : ''}',
-                style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w900, color: Color(0xFF4B3A1E))),
+            child: Text('ด่าน ${widget.level}',
+                style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w900, color: Color(0xFF4B3A1E))),
           ),
         ],
       ),
@@ -3204,11 +3027,23 @@ class _MarketGameScreenState extends State<MarketGameScreen> with TickerProvider
                 borderRadius: BorderRadius.circular(16),
                 border: Border.all(color: _wDeep, width: 2.5),
               ),
+              // เหรียญจริงของบัญชี (เพิ่มขึ้นทันทีที่ส่งของถูกแล้วได้เหรียญ)
               child: Row(
-                children: const [
-                  Icon(Icons.monetization_on_rounded, color: Color(0xFFFFC107), size: 20),
-                  SizedBox(width: 4),
-                  Text('0', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w900, color: Color(0xFFFFF0C8))),
+                children: [
+                  const Icon(Icons.monetization_on_rounded, color: Color(0xFFFFC107), size: 20),
+                  const SizedBox(width: 4),
+                  Flexible(
+                    child: FittedBox(
+                      fit: BoxFit.scaleDown,
+                      child: ValueListenableBuilder<int?>(
+                        valueListenable: CoinBalance.value,
+                        builder: (_, coins, _) => Text(
+                          coins == null ? '-' : '$coins',
+                          style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w900, color: Color(0xFFFFF0C8)),
+                        ),
+                      ),
+                    ),
+                  ),
                 ],
               ),
             ),
@@ -3318,7 +3153,7 @@ class _MarketGameScreenState extends State<MarketGameScreen> with TickerProvider
         children: [
           const Icon(Icons.people_alt_rounded, color: Colors.white, size: 18),
           const SizedBox(width: 4),
-          Text('$_served/${_cfg.customers}',
+          Text('$_served / ${_cfg.customers}',
               style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w900, color: Colors.white)),
         ],
       ),
@@ -3627,7 +3462,7 @@ class _MarketGameScreenState extends State<MarketGameScreen> with TickerProvider
                     boxShadow: const [BoxShadow(color: Color(0x44000000), offset: Offset(0, 2), blurRadius: 2)],
                   ),
                   child: Text(
-                    _praise ?? '🏪 Store is OPEN!',
+                    _praise ?? 'ร้านเปิดแล้ว',
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
                     textAlign: TextAlign.center,
@@ -3635,13 +3470,6 @@ class _MarketGameScreenState extends State<MarketGameScreen> with TickerProvider
                   ),
                 ),
               ),
-              if (_showConfetti)
-                Positioned(
-                  left: 0,
-                  right: 0,
-                  top: 0,
-                  child: Center(child: ConfettiBurst(key: ValueKey<int>(_confettiSeq))),
-                ),
               Positioned(
                 left: 22,
                 top: 48,
@@ -3677,11 +3505,13 @@ class _MarketGameScreenState extends State<MarketGameScreen> with TickerProvider
   }
 
   Widget _buildChalkboard() {
+    final bool orderChipsShown = _cfg.showIcons || _hintIcons;
     final bool waiting = _phase == CustomerPhase.waiting && _orderActive;
     final bool hidden = _cfg.hideText && !_textRevealed;
     const Color chalk = Color(0xFFF7F3E3);
     const Color chalkSoft = Color(0xFFBFE3C8);
     final List<Widget> lines = [];
+    final List<Widget> chips = []; // ชิปเป้าหมาย + ชิปในตะกร้า วางแถวเดียวกัน
 
     if (waiting) {
       lines.add(GestureDetector(
@@ -3707,7 +3537,7 @@ class _MarketGameScreenState extends State<MarketGameScreen> with TickerProvider
         lines.add(Row(
           children: [
             const Expanded(
-              child: Text('Listen carefully! 👂',
+              child: Text('ฟังให้ดีนะ',
                   style: TextStyle(fontSize: 15, fontWeight: FontWeight.w900, color: chalk)),
             ),
             GestureDetector(
@@ -3715,7 +3545,7 @@ class _MarketGameScreenState extends State<MarketGameScreen> with TickerProvider
               child: Container(
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                 decoration: BoxDecoration(color: AppColors.yellow, borderRadius: BorderRadius.circular(12)),
-                child: const Text('Show text 👀',
+                child: const Text('ดูข้อความ',
                     style: TextStyle(fontSize: 11, fontWeight: FontWeight.w900, color: AppColors.ink)),
               ),
             ),
@@ -3730,21 +3560,20 @@ class _MarketGameScreenState extends State<MarketGameScreen> with TickerProvider
           ),
         ));
       }
-      if (_cfg.showIcons || _hintIcons) {
-        lines.add(const SizedBox(height: 5));
-        lines.add(Wrap(
-          spacing: 6,
-          runSpacing: 4,
-          children: _targetOrder.map((req) {
+      if (orderChipsShown) {
+        chips.addAll(_targetOrder.map((req) {
             final bool done = (_basket[req.item.id] ?? 0) >= req.count;
-            return _chalkChip(
+            // แตะเพื่อเอาออก 1 ชิ้น (สินค้าที่หยิบถูกไม่ขึ้นซ้ำในแถวตะกร้าแล้ว)
+            return GestureDetector(
+              onTap: () => _removeItemFromBasket(req.item.id),
+              child: _chalkChip(
               Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   Text(req.item.emoji, style: const TextStyle(fontSize: 18)),
                   const SizedBox(width: 3),
                   Text(
-                    done ? '✓ x${req.count}' : '${_basket[req.item.id] ?? 0}/${req.count}',
+                    done ? '✓ x${req.count}' : '${_basket[req.item.id] ?? 0} / ${req.count}',
                     style: TextStyle(
                       fontSize: 12.5,
                       fontWeight: FontWeight.w900,
@@ -3755,18 +3584,23 @@ class _MarketGameScreenState extends State<MarketGameScreen> with TickerProvider
               ),
               bg: done ? const Color(0xFFDCFCE7) : const Color(0xFFF0F9FF),
               border: done ? AppColors.green : AppColors.orange,
+            ),
             );
-          }).toList(),
-        ));
+          }).toList());
       }
     }
 
-    if (_basket.isNotEmpty) {
-      lines.add(const SizedBox(height: 6));
-      lines.add(Wrap(
-        spacing: 6,
-        runSpacing: 4,
-        children: _basket.entries.map((entry) {
+    // สินค้าที่หยิบถูก (อยู่ในออเดอร์ และไม่เกินจำนวน) แสดงอยู่แล้วที่ป้ายออเดอร์
+    // ด้านบน: แถวตะกร้าแสดงเฉพาะของที่หยิบผิดหรือหยิบเกิน
+    bool shownInOrder(MapEntry<String, int> entry) {
+      if (!orderChipsShown) return false;
+      final req = _targetOrder.where((r) => r.item.id == entry.key);
+      return req.isNotEmpty && entry.value <= req.first.count;
+    }
+
+    final basketChips = _basket.entries.where((e) => !shownInOrder(e)).toList();
+    if (basketChips.isNotEmpty) {
+      chips.addAll(basketChips.map((entry) {
           final item = _itemById(entry.key);
           return GestureDetector(
             onTap: () => _removeItemFromBasket(item.id),
@@ -3781,11 +3615,15 @@ class _MarketGameScreenState extends State<MarketGameScreen> with TickerProvider
               ),
             ),
           );
-        }).toList(),
-      ));
-    } else if (!waiting && _feedback == null) {
+        }).toList());
+    } else if (_basket.isEmpty && !waiting && _feedback == null) {
       lines.add(const Text('แตะสินค้าด้านล่างใส่ตะกร้า',
           style: TextStyle(fontSize: 19, fontWeight: FontWeight.w800, color: chalk)));
+    }
+
+    if (chips.isNotEmpty) {
+      lines.add(const SizedBox(height: 5));
+      lines.add(Wrap(spacing: 6, runSpacing: 4, children: chips));
     }
 
     if (_feedback != null) {
@@ -3819,7 +3657,7 @@ class _MarketGameScreenState extends State<MarketGameScreen> with TickerProvider
           border: Border.all(color: const Color(0xFF1F3329), width: 2),
         ),
         child: ConstrainedBox(
-          constraints: const BoxConstraints(minHeight: 50, maxHeight: 92),
+          constraints: const BoxConstraints(minHeight: 50, maxHeight: 150),
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.center,
             children: [
@@ -3851,6 +3689,19 @@ class _MarketGameScreenState extends State<MarketGameScreen> with TickerProvider
                         onPressed: (_basket.isEmpty || !_orderActive) ? null : _checkOrder,
                         child: const Text('ส่งของ 🛎️',
                             style: TextStyle(fontWeight: FontWeight.w900, fontSize: 14, color: Colors.white)),
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    SizedBox(
+                      width: double.infinity,
+                      child: ChunkyButton(
+                        color: AppColors.red,
+                        shadowColor: AppColors.redDark,
+                        radius: 14,
+                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+                        onPressed: (_basket.isEmpty || !_orderActive) ? null : _clearBasket,
+                        child: const Text('🗑️ ',
+                            style: TextStyle(fontSize: 12, fontWeight: FontWeight.w900, color: Colors.white)),
                       ),
                     ),
                     if (!_cfg.showIcons) ...[
@@ -4169,7 +4020,7 @@ class _CollectionScreenState extends State<CollectionScreen> {
             ..hideCurrentSnackBar()
             ..showSnackBar(const SnackBar(
               duration: Duration(milliseconds: 1500),
-              content: Text('🔒 ส่งสินค้าชิ้นนี้ให้ลูกค้าเพื่อปลดล็อกสติกเกอร์!'),
+              content: Text('🔒 ส่งสินค้าชิ้นนี้ให้ลูกค้าเพื่อปลดล็อกสติกเกอร์ !'),
             )),
       child: Container(
         decoration: BoxDecoration(
@@ -4226,7 +4077,7 @@ class _CollectionScreenState extends State<CollectionScreen> {
                 Expanded(
                   child: Text(st.label, style: TextStyle(fontSize: 16, fontWeight: FontWeight.w900, color: st.color)),
                 ),
-                Text(complete ? '⭐ ครบแล้ว!' : '$got/${items.length}',
+                Text(complete ? 'ครบแล้ว' : '$got / ${items.length}',
                     style: TextStyle(
                         fontSize: 13, fontWeight: FontWeight.w900, color: complete ? AppColors.orangeDark : AppColors.ink)),
               ],
@@ -4279,7 +4130,7 @@ class _CollectionScreenState extends State<CollectionScreen> {
                             borderRadius: BorderRadius.circular(20),
                             boxShadow: const [BoxShadow(color: Color(0x22000000), offset: Offset(0, 2), blurRadius: 3)],
                           ),
-                          child: Text('$got/$total',
+                          child: Text('$got / $total',
                               style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w900, color: AppColors.orangeDark)),
                         ),
                       ],
@@ -4299,7 +4150,7 @@ class _CollectionScreenState extends State<CollectionScreen> {
                   ),
                   const Padding(
                     padding: EdgeInsets.only(bottom: 6),
-                    child: Text('แตะสติกเกอร์เพื่อฟังคำศัพท์ 🔊 ส่งของให้ลูกค้าเพื่อสะสมให้ครบ!',
+                    child: Text('แตะสติกเกอร์เพื่อฟังคำศัพท์ ส่งของให้ลูกค้าเพื่อสะสมให้ครบ !',
                         textAlign: TextAlign.center,
                         style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800, color: AppColors.ink)),
                   ),
@@ -4349,16 +4200,13 @@ class _MiniMarketScreenState extends State<MiniMarketScreen> {
 
 
 // ---------------------------------------------------------------
-// ป้ายแสดงเหรียญ (UI อย่างเดียว ไม่มีระบบเก็บเหรียญ)
+// ป้ายแสดงเหรียญจริงของบัญชี (เหมือนเกมอื่น)
 // ---------------------------------------------------------------
 class _CoinPill extends StatelessWidget {
-  final int coins;
   final Color color;
   final double fontSize;
 
   const _CoinPill({
-    // ignore: unused_element_parameter
-    this.coins = 0,
     this.color = const Color(0xFFB45309),
     this.fontSize = 15,
   });
@@ -4374,7 +4222,7 @@ class _CoinPill extends StatelessWidget {
         border: Border.all(color: const Color(0xFFFFD43B), width: 2),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.12),
+            color: Colors.black.withValues(alpha: 0.12),
             blurRadius: 6,
             offset: const Offset(0, 2),
           ),
@@ -4389,14 +4237,16 @@ class _CoinPill extends StatelessWidget {
             size: fs * 1.45,
           ),
           SizedBox(width: fs * 0.35),
-          Text(
-            '$coins',
+          ValueListenableBuilder<int?>(
+            valueListenable: CoinBalance.value,
+            builder: (_, coins, _) => Text(
+            coins == null ? '-' : '$coins',
             style: TextStyle(
               fontSize: fs,
               fontWeight: FontWeight.w900,
               color: color,
             ),
-          ),
+          )),
         ],
       ),
     );

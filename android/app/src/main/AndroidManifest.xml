@@ -7,8 +7,15 @@
     <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
 
+    <!-- การแจ้งเตือน (flutter_local_notifications) -->
+    <!-- Android 13+ ต้องขอสิทธิ์นี้ก่อนจึงจะแสดงการแจ้งเตือนได้ -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- ตั้งการแจ้งเตือนรายวันใหม่หลังเปิดเครื่อง -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.VIBRATE" />
+
     <application
-        android:label="threeduo_learning"
+        android:label="ThreeDuo Learning"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity
@@ -32,6 +39,21 @@
         <meta-data
             android:name="flutterEmbedding"
             android:value="2" />
+
+        <!-- ตัวรับการแจ้งเตือนที่ตั้งเวลาไว้ (zonedSchedule) ถ้าไม่มี การแจ้งเตือนจะไม่เด้ง -->
+        <receiver
+            android:exported="false"
+            android:name="com.dexterous.flutterlocalnotifications.ScheduledNotificationReceiver" />
+        <receiver
+            android:exported="false"
+            android:name="com.dexterous.flutterlocalnotifications.ScheduledNotificationBootReceiver">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED"/>
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED"/>
+                <action android:name="android.intent.action.QUICKBOOT_POWERON" />
+                <action android:name="com.htc.intent.action.QUICKBOOT_POWERON"/>
+            </intent-filter>
+        </receiver>
     </application>
 
     <queries>
@@ -45,6 +67,12 @@
             <action android:name="android.speech.RecognitionService" />
         </intent>
         
+        <!-- เปิดแอปอีเมล (หน้า "ติดต่อเรา") -->
+        <intent>
+            <action android:name="android.intent.action.SENDTO" />
+            <data android:scheme="mailto" />
+        </intent>
+
         <intent>
             <action android:name="android.intent.action.PROCESS_TEXT"/>
             <data android:mimeType="text/plain"/>

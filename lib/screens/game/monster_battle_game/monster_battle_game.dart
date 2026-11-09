@@ -3,8 +3,11 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_tts/flutter_tts.dart';
-import 'package:audioplayers/audioplayers.dart';
-import 'package:shared_preferences/shared_preferences.dart';
+import '../../../services/coin_balance.dart';
+import '../../../services/monster_battle_service.dart';
+import '../../../services/guess_progress_service.dart' show GuessCoinResult;
+import '../../../widgets/parent_pin_prompt.dart';
+import '../../../services/sfx.dart';
 import 'package:threeduo_learning/screens/profile_screen.dart'
     show AvatarProfile, AvatarPainter, OutfitItem, kSkinTones, kHairColors, kMaleOutfits, kFemaleOutfits;
 
@@ -115,110 +118,6 @@ class _FloatingDamageTextState extends State<FloatingDamageText>
   }
 }
 
-class _ConfettiParticle {
-  final double left;
-  final double delay;
-  final double speed;
-  final Color color;
-  final double size;
-  _ConfettiParticle({
-    required this.left,
-    required this.delay,
-    required this.speed,
-    required this.color,
-    required this.size,
-  });
-}
-
-class ConfettiBurst extends StatefulWidget {
-  const ConfettiBurst({super.key});
-
-  @override
-  State<ConfettiBurst> createState() => _ConfettiBurstState();
-}
-
-class _ConfettiBurstState extends State<ConfettiBurst>
-    with SingleTickerProviderStateMixin {
-  late final AnimationController _controller;
-  late final List<_ConfettiParticle> _particles;
-
-  static const List<Color> _colors = [
-    Color(0xFF60A5FA),
-    Color(0xFF2563EB),
-    Color(0xFFFBBF24),
-    Color(0xFF34D399),
-    Color(0xFFF472B6),
-  ];
-
-  @override
-  void initState() {
-    super.initState();
-    final rnd = math.Random();
-    _particles = List.generate(28, (i) {
-      return _ConfettiParticle(
-        left: rnd.nextDouble(),
-        delay: rnd.nextDouble() * 0.35,
-        speed: 0.7 + rnd.nextDouble() * 0.6,
-        color: _colors[rnd.nextInt(_colors.length)],
-        size: 6 + rnd.nextDouble() * 6,
-      );
-    });
-    _controller = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 1700),
-    )..forward();
-  }
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    const double areaWidth = 260;
-    return IgnorePointer(
-      child: SizedBox(
-        height: 120,
-        width: areaWidth,
-        child: AnimatedBuilder(
-          animation: _controller,
-          builder: (context, child) {
-            return Stack(
-              clipBehavior: Clip.none,
-              children: _particles.map((p) {
-                final t = ((_controller.value - p.delay) / (1 - p.delay))
-                    .clamp(0.0, 1.0);
-                final y = t * 130 * p.speed;
-                final opacity = (1 - t).clamp(0.0, 1.0);
-                return Positioned(
-                  left: p.left * areaWidth,
-                  top: y,
-                  child: Opacity(
-                    opacity: opacity,
-                    child: Transform.rotate(
-                      angle: t * 6.28 * p.speed,
-                      child: Container(
-                        width: p.size,
-                        height: p.size,
-                        decoration: BoxDecoration(
-                          color: p.color,
-                          borderRadius: BorderRadius.circular(2),
-                        ),
-                      ),
-                    ),
-                  ),
-                );
-              }).toList(),
-            );
-          },
-        ),
-      ),
-    );
-  }
-}
-
 class MonsterBattleApp extends StatelessWidget {
   const MonsterBattleApp({super.key});
 
@@ -226,7 +125,7 @@ class MonsterBattleApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       debugShowCheckedModeBanner: false,
-      title: 'Monster Battle RPG',
+      title: 'สร้างมอนสเตอร์',
       theme: ThemeData(
         fontFamily: 'Mitr',
         useMaterial3: true,
@@ -289,10 +188,10 @@ class MonsterAIProfile {
 }
 
 const Map<MonsterAI, MonsterAIProfile> kMonsterAI = {
-  MonsterAI.speedy: MonsterAIProfile('⚡ สายสปีด', 'ตัวนี้ไวแต่พลาดบ่อย! ใจเย็นๆ ไม่ต้องกดมั่ว', 1.0, 2.0, 0.30),
-  MonsterAI.smart: MonsterAIProfile('🧠 สายแม่นยำ', 'ตัวนี้ตอบถูกเกือบทุกข้อ! ต้องอ่านให้ไวกว่าเลย', 4.0, 5.0, 0.03),
-  MonsterAI.trickster: MonsterAIProfile('🎭 สายก่อกวน', 'ระวังโดนบังปุ่ม! ตั้งสติอ่านให้ดีก่อนกด', 3.0, 4.5, 0.15),
-  MonsterAI.berserker: MonsterAIProfile('😡 สายคลั่ง', 'ยิ่งเลือดน้อยยิ่งไว! รีบจบให้ไวก่อนมันเร่งสปีด', 3.5, 4.5, 0.12),
+  MonsterAI.speedy: MonsterAIProfile('สายสปีด', 'ตัวนี้ไวแต่พลาดบ่อย ใจเย็น ๆ ไม่ต้องกดมั่ว', 1.0, 2.0, 0.30),
+  MonsterAI.smart: MonsterAIProfile('สายแม่นยำ', 'ตัวนี้ตอบถูกเกือบทุกข้อ ต้องอ่านให้ไวกว่าเลย', 4.0, 5.0, 0.03),
+  MonsterAI.trickster: MonsterAIProfile('สายก่อกวน', 'ระวังโดนบังปุ่ม ตั้งสติอ่านให้ดีก่อนกด', 3.0, 4.5, 0.15),
+  MonsterAI.berserker: MonsterAIProfile('สายคลั่ง', 'ยิ่งเลือดน้อยยิ่งไว รีบจบให้ไวก่อนมันเร่งสปีด', 3.5, 4.5, 0.12),
 };
 
 enum _Phase { ready, racing, grace, clash, resolved }
@@ -304,8 +203,6 @@ class Monster {
   int maxHp;
   int currentHp;
   int atk;
-  int expReward;
-  int goldReward;
 
   Monster({
     required this.name,
@@ -314,8 +211,6 @@ class Monster {
     required this.maxHp,
     required this.currentHp,
     required this.atk,
-    required this.expReward,
-    required this.goldReward,
   });
 }
 
@@ -324,90 +219,90 @@ class Monster {
 // ==========================================
 final Map<DifficultyLevel, List<Map<String, dynamic>>> categoryVocabBank = {
   DifficultyLevel.easy: [
-    {'word': 'Apple', 'correct': 'แอปเปิ้ล', 'wrongs': ['กล้วย', 'ส้ม', 'มะม่วง'], 'cat': 'Fruits 🍎'},
-    {'word': 'Banana', 'correct': 'กล้วย', 'wrongs': ['มะพร้าว', 'ส้ม', 'องุ่น'], 'cat': 'Fruits 🍎'},
-    {'word': 'Orange', 'correct': 'ส้ม', 'wrongs': ['มะนาว', 'แอปเปิ้ล', 'กีวี'], 'cat': 'Fruits 🍎'},
-    {'word': 'Running', 'correct': 'การวิ่ง', 'wrongs': ['การว่ายน้ำ', 'การเดิน', 'การกระโดด'], 'cat': 'Sports ⚽'},
-    {'word': 'Golf', 'correct': 'กอล์ฟ', 'wrongs': ['ฟุตบอล', 'เทนนิส', 'บาสเกตบอล'], 'cat': 'Sports ⚽'},
-    {'word': 'Cat', 'correct': 'แมว', 'wrongs': ['สุนัข', 'หนู', 'กระต่าย'], 'cat': 'Animals 🐾'},
-    {'word': 'Dog', 'correct': 'สุนัข', 'wrongs': ['แมว', 'เสือ', 'หมี'], 'cat': 'Animals 🐾'},
-    {'word': 'Fish', 'correct': 'ปลา', 'wrongs': ['กุ้ง', 'ปู', 'หอย'], 'cat': 'Animals 🐾'},
-    {'word': 'Cook', 'correct': 'พ่อครัว', 'wrongs': ['ครู', 'หมอ', 'ตำรวจ'], 'cat': 'Occupations 💼'},
-    {'word': 'Doctor', 'correct': 'หมอ', 'wrongs': ['พยาบาล', 'ทหาร', 'วิศวกร'], 'cat': 'Occupations 💼'},
-    {'word': 'Car', 'correct': 'รถยนต์', 'wrongs': ['รถจักรยาน', 'เรือ', 'เครื่องบิน'], 'cat': 'Vehicles 🚗'},
-    {'word': 'Bus', 'correct': 'รถเมล์', 'wrongs': ['รถไฟ', 'รถตู้', 'รถแท็กซี่'], 'cat': 'Vehicles 🚗'},
-    {'word': 'Park', 'correct': 'สวนสาธารณะ', 'wrongs': ['โรงเรียน', 'บ้าน', 'วัด'], 'cat': 'Places 📍'},
-    {'word': 'Home', 'correct': 'บ้าน', 'wrongs': ['ร้านค้า', 'โรงแรม', 'ตลาด'], 'cat': 'Places 📍'},
-    {'word': 'Mango', 'correct': 'มะม่วง', 'wrongs': ['ทุเรียน', 'มะละกอ', 'ลำไย'], 'cat': 'Fruits 🍎'},
-    {'word': 'Jumping', 'correct': 'การกระโดด', 'wrongs': ['การวิ่ง', 'การนั่ง', 'การนอน'], 'cat': 'Sports ⚽'},
-    {'word': 'Bird', 'correct': 'นก', 'wrongs': ['ปลา', 'ผีเสื้อ', 'กบ'], 'cat': 'Animals 🐾'},
-    {'word': 'Cow', 'correct': 'วัว', 'wrongs': ['ม้า', 'แพะ', 'หมู'], 'cat': 'Animals 🐾'},
-    {'word': 'Police', 'correct': 'ตำรวจ', 'wrongs': ['ทหาร', 'ครู', 'ชาวนา'], 'cat': 'Occupations 💼'},
-    {'word': 'Boat', 'correct': 'เรือ', 'wrongs': ['รถไฟ', 'รถบรรทุก', 'เครื่องบิน'], 'cat': 'Vehicles 🚗'},
-    {'word': 'Train', 'correct': 'รถไฟ', 'wrongs': ['รถเมล์', 'เรือ', 'จักรยาน'], 'cat': 'Vehicles 🚗'},
-    {'word': 'School', 'correct': 'โรงเรียน', 'wrongs': ['โรงพยาบาล', 'ตลาด', 'สนามบิน'], 'cat': 'Places 📍'},
-    {'word': 'Red', 'correct': 'สีแดง', 'wrongs': ['สีเขียว', 'สีเหลือง', 'สีดำ'], 'cat': 'Colors 🎨'},
-    {'word': 'Green', 'correct': 'สีเขียว', 'wrongs': ['สีแดง', 'สีดำ', 'สีขาว'], 'cat': 'Colors 🎨'},
-    {'word': 'Yellow', 'correct': 'สีเหลือง', 'wrongs': ['สีส้ม', 'สีม่วง', 'สีชมพู'], 'cat': 'Colors 🎨'},
-    {'word': 'Mother', 'correct': 'แม่', 'wrongs': ['พ่อ', 'ป้า', 'ยาย'], 'cat': 'Family 👨‍👩‍👧'},
-    {'word': 'Father', 'correct': 'พ่อ', 'wrongs': ['แม่', 'ลุง', 'ตา'], 'cat': 'Family 👨‍👩‍👧'},
+    {'word': 'Apple', 'correct': 'แอปเปิ้ล', 'wrongs': ['กล้วย', 'ส้ม', 'มะม่วง'], 'cat': 'ผลไม้ 🍎'},
+    {'word': 'Banana', 'correct': 'กล้วย', 'wrongs': ['มะพร้าว', 'ส้ม', 'องุ่น'], 'cat': 'ผลไม้ 🍎'},
+    {'word': 'Orange', 'correct': 'ส้ม', 'wrongs': ['มะนาว', 'แอปเปิ้ล', 'กีวี'], 'cat': 'ผลไม้ 🍎'},
+    {'word': 'Running', 'correct': 'การวิ่ง', 'wrongs': ['การว่ายน้ำ', 'การเดิน', 'การกระโดด'], 'cat': 'กีฬา ⚽'},
+    {'word': 'Golf', 'correct': 'กอล์ฟ', 'wrongs': ['ฟุตบอล', 'เทนนิส', 'บาสเกตบอล'], 'cat': 'กีฬา ⚽'},
+    {'word': 'Cat', 'correct': 'แมว', 'wrongs': ['สุนัข', 'หนู', 'กระต่าย'], 'cat': 'สัตว์ 🐾'},
+    {'word': 'Dog', 'correct': 'สุนัข', 'wrongs': ['แมว', 'เสือ', 'หมี'], 'cat': 'สัตว์ 🐾'},
+    {'word': 'Fish', 'correct': 'ปลา', 'wrongs': ['กุ้ง', 'ปู', 'หอย'], 'cat': 'สัตว์ 🐾'},
+    {'word': 'Cook', 'correct': 'พ่อครัว', 'wrongs': ['ครู', 'หมอ', 'ตำรวจ'], 'cat': 'อาชีพ 💼'},
+    {'word': 'Doctor', 'correct': 'หมอ', 'wrongs': ['พยาบาล', 'ทหาร', 'วิศวกร'], 'cat': 'อาชีพ 💼'},
+    {'word': 'Car', 'correct': 'รถยนต์', 'wrongs': ['รถจักรยาน', 'เรือ', 'เครื่องบิน'], 'cat': 'ยานพาหนะ 🚗'},
+    {'word': 'Bus', 'correct': 'รถเมล์', 'wrongs': ['รถไฟ', 'รถตู้', 'รถแท็กซี่'], 'cat': 'ยานพาหนะ 🚗'},
+    {'word': 'Park', 'correct': 'สวนสาธารณะ', 'wrongs': ['โรงเรียน', 'บ้าน', 'วัด'], 'cat': 'สถานที่ 📍'},
+    {'word': 'Home', 'correct': 'บ้าน', 'wrongs': ['ร้านค้า', 'โรงแรม', 'ตลาด'], 'cat': 'สถานที่ 📍'},
+    {'word': 'Mango', 'correct': 'มะม่วง', 'wrongs': ['ทุเรียน', 'มะละกอ', 'ลำไย'], 'cat': 'ผลไม้ 🍎'},
+    {'word': 'Jumping', 'correct': 'การกระโดด', 'wrongs': ['การวิ่ง', 'การนั่ง', 'การนอน'], 'cat': 'กีฬา ⚽'},
+    {'word': 'Bird', 'correct': 'นก', 'wrongs': ['ปลา', 'ผีเสื้อ', 'กบ'], 'cat': 'สัตว์ 🐾'},
+    {'word': 'Cow', 'correct': 'วัว', 'wrongs': ['ม้า', 'แพะ', 'หมู'], 'cat': 'สัตว์ 🐾'},
+    {'word': 'Police', 'correct': 'ตำรวจ', 'wrongs': ['ทหาร', 'ครู', 'ชาวนา'], 'cat': 'อาชีพ 💼'},
+    {'word': 'Boat', 'correct': 'เรือ', 'wrongs': ['รถไฟ', 'รถบรรทุก', 'เครื่องบิน'], 'cat': 'ยานพาหนะ 🚗'},
+    {'word': 'Train', 'correct': 'รถไฟ', 'wrongs': ['รถเมล์', 'เรือ', 'จักรยาน'], 'cat': 'ยานพาหนะ 🚗'},
+    {'word': 'School', 'correct': 'โรงเรียน', 'wrongs': ['โรงพยาบาล', 'ตลาด', 'สนามบิน'], 'cat': 'สถานที่ 📍'},
+    {'word': 'Red', 'correct': 'สีแดง', 'wrongs': ['สีเขียว', 'สีเหลือง', 'สีดำ'], 'cat': 'สี 🎨'},
+    {'word': 'Green', 'correct': 'สีเขียว', 'wrongs': ['สีแดง', 'สีดำ', 'สีขาว'], 'cat': 'สี 🎨'},
+    {'word': 'Yellow', 'correct': 'สีเหลือง', 'wrongs': ['สีส้ม', 'สีม่วง', 'สีชมพู'], 'cat': 'สี 🎨'},
+    {'word': 'Mother', 'correct': 'แม่', 'wrongs': ['พ่อ', 'ป้า', 'ยาย'], 'cat': 'ครอบครัว 👨‍👩‍👧'},
+    {'word': 'Father', 'correct': 'พ่อ', 'wrongs': ['แม่', 'ลุง', 'ตา'], 'cat': 'ครอบครัว 👨‍👩‍👧'},
   ],
   DifficultyLevel.medium: [
-    {'word': 'Pineapple', 'correct': 'สับปะรด', 'wrongs': ['แตงโม', 'มะละกอ', 'ขนุน'], 'cat': 'Fruits 🍎'},
-    {'word': 'Strawberry', 'correct': 'สตรอว์เบอร์รี', 'wrongs': ['เชอร์รี่', 'บลูเบอร์รี่', 'องุ่น'], 'cat': 'Fruits 🍎'},
-    {'word': 'Football', 'correct': 'ฟุตบอล', 'wrongs': ['วอลเลย์บอล', 'แฮนด์บอล', 'เบสบอล'], 'cat': 'Sports ⚽'},
-    {'word': 'Swimming', 'correct': 'การว่ายน้ำ', 'wrongs': ['การดำน้ำ', 'การโต้คลื่น', 'การพายเรือ'], 'cat': 'Sports ⚽'},
-    {'word': 'Elephant', 'correct': 'ช้าง', 'wrongs': ['ยีราฟ', 'แรด', 'ฮิปโป'], 'cat': 'Animals 🐾'},
-    {'word': 'Dolphin', 'correct': 'โลมา', 'wrongs': ['ฉลาม', 'วาฬ', 'แมวน้ำ'], 'cat': 'Animals 🐾'},
-    {'word': 'Teacher', 'correct': 'ครู', 'wrongs': ['นักเรียน', 'ศาสตราจารย์', 'บรรณารักษ์'], 'cat': 'Occupations 💼'},
-    {'word': 'Engineer', 'correct': 'วิศวกร', 'wrongs': ['สถาปนิก', 'ช่างไฟ', 'ช่างยนต์'], 'cat': 'Occupations 💼'},
-    {'word': 'Bicycle', 'correct': 'รถจักรยาน', 'wrongs': ['จักรยานยนต์', 'รถสามล้อ', 'รถสกู๊ตเตอร์'], 'cat': 'Vehicles 🚗'},
-    {'word': 'Airplane', 'correct': 'เครื่องบิน', 'wrongs': ['เฮลิคอปเตอร์', 'บอลลูน', 'จรวด'], 'cat': 'Vehicles 🚗'},
-    {'word': 'Hospital', 'correct': 'โรงพยาบาล', 'wrongs': ['คลินิก', 'ร้านขายยา', 'สถานีตำรวจ'], 'cat': 'Places 📍'},
-    {'word': 'Library', 'correct': 'ห้องสมุด', 'wrongs': ['ร้านหนังสือ', 'โรงเรียน', 'พิพิธภัณฑ์'], 'cat': 'Places 📍'},
-    {'word': 'Watermelon', 'correct': 'แตงโม', 'wrongs': ['เมลอน', 'ฟักทอง', 'แคนตาลูป'], 'cat': 'Fruits 🍎'},
-    {'word': 'Grapes', 'correct': 'องุ่น', 'wrongs': ['เชอร์รี่', 'พลัม', 'ลูกพีช'], 'cat': 'Fruits 🍎'},
-    {'word': 'Basketball', 'correct': 'บาสเกตบอล', 'wrongs': ['วอลเลย์บอล', 'เทนนิส', 'แบดมินตัน'], 'cat': 'Sports ⚽'},
-    {'word': 'Badminton', 'correct': 'แบดมินตัน', 'wrongs': ['เทนนิส', 'ปิงปอง', 'สควอช'], 'cat': 'Sports ⚽'},
-    {'word': 'Giraffe', 'correct': 'ยีราฟ', 'wrongs': ['ม้าลาย', 'อูฐ', 'กวาง'], 'cat': 'Animals 🐾'},
-    {'word': 'Penguin', 'correct': 'เพนกวิน', 'wrongs': ['นกกระทุง', 'นกฮูก', 'นกอินทรี'], 'cat': 'Animals 🐾'},
-    {'word': 'Firefighter', 'correct': 'นักดับเพลิง', 'wrongs': ['ตำรวจ', 'ทหาร', 'พยาบาล'], 'cat': 'Occupations 💼'},
-    {'word': 'Pilot', 'correct': 'นักบิน', 'wrongs': ['กัปตันเรือ', 'วิศวกร', 'พ่อครัว'], 'cat': 'Occupations 💼'},
-    {'word': 'Motorcycle', 'correct': 'จักรยานยนต์', 'wrongs': ['รถจักรยาน', 'รถบรรทุก', 'รถแทรกเตอร์'], 'cat': 'Vehicles 🚗'},
-    {'word': 'Airport', 'correct': 'สนามบิน', 'wrongs': ['ท่าเรือ', 'สถานีรถไฟ', 'ท่ารถ'], 'cat': 'Places 📍'},
-    {'word': 'Museum', 'correct': 'พิพิธภัณฑ์', 'wrongs': ['ห้องสมุด', 'โรงละคร', 'หอศิลป์'], 'cat': 'Places 📍'},
-    {'word': 'Bakery', 'correct': 'ร้านเบเกอรี่', 'wrongs': ['ร้านขายผัก', 'ร้านตัดผม', 'ร้านขายยา'], 'cat': 'Places 📍'},
+    {'word': 'Pineapple', 'correct': 'สับปะรด', 'wrongs': ['แตงโม', 'มะละกอ', 'ขนุน'], 'cat': 'ผลไม้ 🍎'},
+    {'word': 'Strawberry', 'correct': 'สตรอว์เบอร์รี', 'wrongs': ['เชอร์รี่', 'บลูเบอร์รี่', 'องุ่น'], 'cat': 'ผลไม้ 🍎'},
+    {'word': 'Football', 'correct': 'ฟุตบอล', 'wrongs': ['วอลเลย์บอล', 'แฮนด์บอล', 'เบสบอล'], 'cat': 'กีฬา ⚽'},
+    {'word': 'Swimming', 'correct': 'การว่ายน้ำ', 'wrongs': ['การดำน้ำ', 'การโต้คลื่น', 'การพายเรือ'], 'cat': 'กีฬา ⚽'},
+    {'word': 'Elephant', 'correct': 'ช้าง', 'wrongs': ['ยีราฟ', 'แรด', 'ฮิปโป'], 'cat': 'สัตว์ 🐾'},
+    {'word': 'Dolphin', 'correct': 'โลมา', 'wrongs': ['ฉลาม', 'วาฬ', 'แมวน้ำ'], 'cat': 'สัตว์ 🐾'},
+    {'word': 'Teacher', 'correct': 'ครู', 'wrongs': ['นักเรียน', 'ศาสตราจารย์', 'บรรณารักษ์'], 'cat': 'อาชีพ 💼'},
+    {'word': 'Engineer', 'correct': 'วิศวกร', 'wrongs': ['สถาปนิก', 'ช่างไฟ', 'ช่างยนต์'], 'cat': 'อาชีพ 💼'},
+    {'word': 'Bicycle', 'correct': 'รถจักรยาน', 'wrongs': ['จักรยานยนต์', 'รถสามล้อ', 'รถสกู๊ตเตอร์'], 'cat': 'ยานพาหนะ 🚗'},
+    {'word': 'Airplane', 'correct': 'เครื่องบิน', 'wrongs': ['เฮลิคอปเตอร์', 'บอลลูน', 'จรวด'], 'cat': 'ยานพาหนะ 🚗'},
+    {'word': 'Hospital', 'correct': 'โรงพยาบาล', 'wrongs': ['คลินิก', 'ร้านขายยา', 'สถานีตำรวจ'], 'cat': 'สถานที่ 📍'},
+    {'word': 'Library', 'correct': 'ห้องสมุด', 'wrongs': ['ร้านหนังสือ', 'โรงเรียน', 'พิพิธภัณฑ์'], 'cat': 'สถานที่ 📍'},
+    {'word': 'Watermelon', 'correct': 'แตงโม', 'wrongs': ['เมลอน', 'ฟักทอง', 'แคนตาลูป'], 'cat': 'ผลไม้ 🍎'},
+    {'word': 'Grapes', 'correct': 'องุ่น', 'wrongs': ['เชอร์รี่', 'พลัม', 'ลูกพีช'], 'cat': 'ผลไม้ 🍎'},
+    {'word': 'Basketball', 'correct': 'บาสเกตบอล', 'wrongs': ['วอลเลย์บอล', 'เทนนิส', 'แบดมินตัน'], 'cat': 'กีฬา ⚽'},
+    {'word': 'Badminton', 'correct': 'แบดมินตัน', 'wrongs': ['เทนนิส', 'ปิงปอง', 'สควอช'], 'cat': 'กีฬา ⚽'},
+    {'word': 'Giraffe', 'correct': 'ยีราฟ', 'wrongs': ['ม้าลาย', 'อูฐ', 'กวาง'], 'cat': 'สัตว์ 🐾'},
+    {'word': 'Penguin', 'correct': 'เพนกวิน', 'wrongs': ['นกกระทุง', 'นกฮูก', 'นกอินทรี'], 'cat': 'สัตว์ 🐾'},
+    {'word': 'Firefighter', 'correct': 'นักดับเพลิง', 'wrongs': ['ตำรวจ', 'ทหาร', 'พยาบาล'], 'cat': 'อาชีพ 💼'},
+    {'word': 'Pilot', 'correct': 'นักบิน', 'wrongs': ['กัปตันเรือ', 'วิศวกร', 'พ่อครัว'], 'cat': 'อาชีพ 💼'},
+    {'word': 'Motorcycle', 'correct': 'จักรยานยนต์', 'wrongs': ['รถจักรยาน', 'รถบรรทุก', 'รถแทรกเตอร์'], 'cat': 'ยานพาหนะ 🚗'},
+    {'word': 'Airport', 'correct': 'สนามบิน', 'wrongs': ['ท่าเรือ', 'สถานีรถไฟ', 'ท่ารถ'], 'cat': 'สถานที่ 📍'},
+    {'word': 'Museum', 'correct': 'พิพิธภัณฑ์', 'wrongs': ['ห้องสมุด', 'โรงละคร', 'หอศิลป์'], 'cat': 'สถานที่ 📍'},
+    {'word': 'Bakery', 'correct': 'ร้านเบเกอรี่', 'wrongs': ['ร้านขายผัก', 'ร้านตัดผม', 'ร้านขายยา'], 'cat': 'สถานที่ 📍'},
   ],
   DifficultyLevel.hard: [
-    {'word': 'Pomegranate', 'correct': 'ทับทิม', 'wrongs': ['มังคุด', 'ลองกอง', 'ส้มโอ'], 'cat': 'Fruits 🍎'},
-    {'word': 'Dragon Fruit', 'correct': 'แก้วมังกร', 'wrongs': ['เสาวรส', 'มะเฟือง', 'ลูกพลับ'], 'cat': 'Fruits 🍎'},
-    {'word': 'Taekwondo', 'correct': 'เทควันโด', 'wrongs': ['คาราเต้', 'ยูโด', 'มวยไทย'], 'cat': 'Sports ⚽'},
-    {'word': 'Gymnastics', 'correct': 'ยิมนาสติก', 'wrongs': ['กรีฑา', 'เต้นรำ', 'บัลเลต์'], 'cat': 'Sports ⚽'},
-    {'word': 'Chameleon', 'correct': 'กิ้งก่าเปลี่ยนสี', 'wrongs': ['อีกัวน่า', 'จิ้งจก', 'ตุ๊กแก'], 'cat': 'Animals 🐾'},
-    {'word': 'Rhinoceros', 'correct': 'แรด', 'wrongs': ['ฮิปโปโปเตมัส', 'ช้างเผือก', 'ควายป่า'], 'cat': 'Animals 🐾'},
-    {'word': 'Archaeologist', 'correct': 'นักโบราณคดี', 'wrongs': ['นักวิทยาศาสตร์', 'นักธรณีวิทยา', 'นักดาราศาสตร์'], 'cat': 'Occupations 💼'},
-    {'word': 'Entrepreneur', 'correct': 'ผู้ประกอบการ', 'wrongs': ['นักลงทุน', 'ผู้จัดการ', 'พนักงานบัญชี'], 'cat': 'Occupations 💼'},
-    {'word': 'Submarine', 'correct': 'เรือดำน้ำ', 'wrongs': ['เรือรบ', 'เรือบรรทุกสินค้า', 'เรือยอชต์'], 'cat': 'Vehicles 🚗'},
-    {'word': 'Hovercraft', 'correct': 'เรือสะเทินน้ำสะเทินบก', 'wrongs': ['เจ็ทสกี', 'เรือหางยาว', 'เรือเร็ว'], 'cat': 'Vehicles 🚗'},
-    {'word': 'Amphitheater', 'correct': 'อัฒจันทร์กลางแจ้ง', 'wrongs': ['โรงละคร', 'สนามกีฬา', 'หอประชุม'], 'cat': 'Places 📍'},
-    {'word': 'Observatory', 'correct': 'หอดูดาว', 'wrongs': ['ท้องฟ้าจำลอง', 'หอคอย', 'สถานีอุตุนิยมวิทยา'], 'cat': 'Places 📍'},
-    {'word': 'Persimmon', 'correct': 'ลูกพลับ', 'wrongs': ['ลูกท้อ', 'ลูกพรุน', 'ลูกแพร์'], 'cat': 'Fruits 🍎'},
-    {'word': 'Mangosteen', 'correct': 'มังคุด', 'wrongs': ['เงาะ', 'ลางสาด', 'ระกำ'], 'cat': 'Fruits 🍎'},
-    {'word': 'Fencing', 'correct': 'ฟันดาบ', 'wrongs': ['ยิงธนู', 'ยิงปืน', 'พายเรือ'], 'cat': 'Sports ⚽'},
-    {'word': 'Archery', 'correct': 'ยิงธนู', 'wrongs': ['ฟันดาบ', 'ขว้างหอก', 'ยิงปืน'], 'cat': 'Sports ⚽'},
-    {'word': 'Platypus', 'correct': 'ตุ่นปากเป็ด', 'wrongs': ['ตัวนิ่ม', 'เม่น', 'ตัวกินมด'], 'cat': 'Animals 🐾'},
-    {'word': 'Flamingo', 'correct': 'นกฟลามิงโก', 'wrongs': ['นกกระเรียน', 'นกกระทุง', 'นกกระสา'], 'cat': 'Animals 🐾'},
-    {'word': 'Veterinarian', 'correct': 'สัตวแพทย์', 'wrongs': ['เภสัชกร', 'ทันตแพทย์', 'พยาบาล'], 'cat': 'Occupations 💼'},
-    {'word': 'Architect', 'correct': 'สถาปนิก', 'wrongs': ['วิศวกร', 'มัณฑนากร', 'นักออกแบบกราฟิก'], 'cat': 'Occupations 💼'},
-    {'word': 'Ambulance', 'correct': 'รถพยาบาล', 'wrongs': ['รถดับเพลิง', 'รถตำรวจ', 'รถขยะ'], 'cat': 'Vehicles 🚗'},
-    {'word': 'Lighthouse', 'correct': 'ประภาคาร', 'wrongs': ['หอนาฬิกา', 'เจดีย์', 'หอคอย'], 'cat': 'Places 📍'},
-    {'word': 'Skyscraper', 'correct': 'ตึกระฟ้า', 'wrongs': ['บังกะโล', 'โกดัง', 'กระท่อม'], 'cat': 'Places 📍'},
+    {'word': 'Pomegranate', 'correct': 'ทับทิม', 'wrongs': ['มังคุด', 'ลองกอง', 'ส้มโอ'], 'cat': 'ผลไม้ 🍎'},
+    {'word': 'Dragon Fruit', 'correct': 'แก้วมังกร', 'wrongs': ['เสาวรส', 'มะเฟือง', 'ลูกพลับ'], 'cat': 'ผลไม้ 🍎'},
+    {'word': 'Taekwondo', 'correct': 'เทควันโด', 'wrongs': ['คาราเต้', 'ยูโด', 'มวยไทย'], 'cat': 'กีฬา ⚽'},
+    {'word': 'Gymnastics', 'correct': 'ยิมนาสติก', 'wrongs': ['กรีฑา', 'เต้นรำ', 'บัลเลต์'], 'cat': 'กีฬา ⚽'},
+    {'word': 'Chameleon', 'correct': 'กิ้งก่าเปลี่ยนสี', 'wrongs': ['อีกัวน่า', 'จิ้งจก', 'ตุ๊กแก'], 'cat': 'สัตว์ 🐾'},
+    {'word': 'Rhinoceros', 'correct': 'แรด', 'wrongs': ['ฮิปโปโปเตมัส', 'ช้างเผือก', 'ควายป่า'], 'cat': 'สัตว์ 🐾'},
+    {'word': 'Archaeologist', 'correct': 'นักโบราณคดี', 'wrongs': ['นักวิทยาศาสตร์', 'นักธรณีวิทยา', 'นักดาราศาสตร์'], 'cat': 'อาชีพ 💼'},
+    {'word': 'Entrepreneur', 'correct': 'ผู้ประกอบการ', 'wrongs': ['นักลงทุน', 'ผู้จัดการ', 'พนักงานบัญชี'], 'cat': 'อาชีพ 💼'},
+    {'word': 'Submarine', 'correct': 'เรือดำน้ำ', 'wrongs': ['เรือรบ', 'เรือบรรทุกสินค้า', 'เรือยอชต์'], 'cat': 'ยานพาหนะ 🚗'},
+    {'word': 'Hovercraft', 'correct': 'เรือสะเทินน้ำสะเทินบก', 'wrongs': ['เจ็ทสกี', 'เรือหางยาว', 'เรือเร็ว'], 'cat': 'ยานพาหนะ 🚗'},
+    {'word': 'Amphitheater', 'correct': 'อัฒจันทร์กลางแจ้ง', 'wrongs': ['โรงละคร', 'สนามกีฬา', 'หอประชุม'], 'cat': 'สถานที่ 📍'},
+    {'word': 'Observatory', 'correct': 'หอดูดาว', 'wrongs': ['ท้องฟ้าจำลอง', 'หอคอย', 'สถานีอุตุนิยมวิทยา'], 'cat': 'สถานที่ 📍'},
+    {'word': 'Persimmon', 'correct': 'ลูกพลับ', 'wrongs': ['ลูกท้อ', 'ลูกพรุน', 'ลูกแพร์'], 'cat': 'ผลไม้ 🍎'},
+    {'word': 'Mangosteen', 'correct': 'มังคุด', 'wrongs': ['เงาะ', 'ลางสาด', 'ระกำ'], 'cat': 'ผลไม้ 🍎'},
+    {'word': 'Fencing', 'correct': 'ฟันดาบ', 'wrongs': ['ยิงธนู', 'ยิงปืน', 'พายเรือ'], 'cat': 'กีฬา ⚽'},
+    {'word': 'Archery', 'correct': 'ยิงธนู', 'wrongs': ['ฟันดาบ', 'ขว้างหอก', 'ยิงปืน'], 'cat': 'กีฬา ⚽'},
+    {'word': 'Platypus', 'correct': 'ตุ่นปากเป็ด', 'wrongs': ['ตัวนิ่ม', 'เม่น', 'ตัวกินมด'], 'cat': 'สัตว์ 🐾'},
+    {'word': 'Flamingo', 'correct': 'นกฟลามิงโก', 'wrongs': ['นกกระเรียน', 'นกกระทุง', 'นกกระสา'], 'cat': 'สัตว์ 🐾'},
+    {'word': 'Veterinarian', 'correct': 'สัตวแพทย์', 'wrongs': ['เภสัชกร', 'ทันตแพทย์', 'พยาบาล'], 'cat': 'อาชีพ 💼'},
+    {'word': 'Architect', 'correct': 'สถาปนิก', 'wrongs': ['วิศวกร', 'มัณฑนากร', 'นักออกแบบกราฟิก'], 'cat': 'อาชีพ 💼'},
+    {'word': 'Ambulance', 'correct': 'รถพยาบาล', 'wrongs': ['รถดับเพลิง', 'รถตำรวจ', 'รถขยะ'], 'cat': 'ยานพาหนะ 🚗'},
+    {'word': 'Lighthouse', 'correct': 'ประภาคาร', 'wrongs': ['หอนาฬิกา', 'เจดีย์', 'หอคอย'], 'cat': 'สถานที่ 📍'},
+    {'word': 'Skyscraper', 'correct': 'ตึกระฟ้า', 'wrongs': ['บังกะโล', 'โกดัง', 'กระท่อม'], 'cat': 'สถานที่ 📍'},
   ],
 };
 
 final Map<DifficultyLevel, DifficultyConfig> kDifficultyConfigs = {
   DifficultyLevel.easy: DifficultyConfig(
-    title: 'ระดับง่าย (Easy)',
+    title: 'ระดับง่าย',
     description: 'คำศัพท์พื้นฐาน / มีเวลา 15 วินาที / มอนสเตอร์โจมตีเบา',
     timeLimit: 15,
     monsterAtkMultiplier: 0.8,
@@ -416,7 +311,7 @@ final Map<DifficultyLevel, DifficultyConfig> kDifficultyConfigs = {
     icon: Icons.sentiment_satisfied_alt_rounded,
   ),
   DifficultyLevel.medium: DifficultyConfig(
-    title: 'ระดับปานกลาง (Medium)',
+    title: 'ระดับปานกลาง',
     description: 'คำศัพท์ทั่วไป / มีเวลา 10 วินาที / ความท้าทายปกติ',
     timeLimit: 10,
     monsterAtkMultiplier: 1.0,
@@ -425,8 +320,8 @@ final Map<DifficultyLevel, DifficultyConfig> kDifficultyConfigs = {
     icon: Icons.bolt_rounded,
   ),
   DifficultyLevel.hard: DifficultyConfig(
-    title: 'ระดับยาก (Hard)',
-    description: 'คำศัพท์เฉพาะทาง / มีเวลา 6 วินาที / มอนสเตอร์โจมตีแรง (+EXP & Gold)',
+    title: 'ระดับยาก',
+    description: 'คำศัพท์เฉพาะทาง / มีเวลา 6 วินาที / มอนสเตอร์โจมตีแรง',
     timeLimit: 6,
     monsterAtkMultiplier: 1.4,
     rewardMultiplier: 1.6,
@@ -1642,7 +1537,7 @@ const Map<String, String> kWordEmoji = {
 String _emojiFor(VocabQuestion q) => kWordEmoji[q.word] ?? q.category.split(' ').last;
 
 
-const int kMonsterLevels = 50; // 10 โลก × 5 ด่าน (ด่านที่หาร 5 ลงตัวคือบอส)
+const int kMonsterLevels = 40; // 40 ด่าน (ด่านที่หาร 5 ลงตัวคือบอส)
 
 class MonsterTemplate {
   final String name;
@@ -1671,7 +1566,7 @@ class WorldTheme {
 
 const List<WorldTheme> kWorlds = [
   WorldTheme(
-    name: 'Green Forest',
+    name: 'ป่าเขียวขจี',
     emoji: '🌲',
     colors: [Color(0xFFF0FDF4), Color(0xFF86EFAC)],
     accent: Color(0xFF16A34A),
@@ -1684,7 +1579,7 @@ const List<WorldTheme> kWorlds = [
     boss: MonsterTemplate('ราชาตาเดียว', kLookBossTeal),
   ),
   WorldTheme(
-    name: 'Crystal Cave',
+    name: 'ถ้ำคริสตัล',
     emoji: '💎',
     colors: [Color(0xFFF5F3FF), Color(0xFFC4B5FD)],
     accent: Color(0xFF7C3AED),
@@ -1697,7 +1592,7 @@ const List<WorldTheme> kWorlds = [
     boss: MonsterTemplate('ราชาถ้ำคริสตัล', kLookBossPurple),
   ),
   WorldTheme(
-    name: 'Lava Volcano',
+    name: 'ภูเขาไฟลาวา',
     emoji: '🌋',
     colors: [Color(0xFFFFF7ED), Color(0xFFFDBA74)],
     accent: Color(0xFFEA580C),
@@ -1710,7 +1605,7 @@ const List<WorldTheme> kWorlds = [
     boss: MonsterTemplate('จ้าวภูเขาไฟ', kLookBossRed),
   ),
   WorldTheme(
-    name: 'Sky Castle',
+    name: 'ปราสาทลอยฟ้า',
     emoji: '🏰',
     colors: [Color(0xFFF0F9FF), Color(0xFF93C5FD)],
     accent: Color(0xFF2563EB),
@@ -1723,7 +1618,7 @@ const List<WorldTheme> kWorlds = [
     boss: MonsterTemplate('จอมราชาแห่งฟ้า', kLookBossDark),
   ),
   WorldTheme(
-    name: 'Candy Land',
+    name: 'ดินแดนขนมหวาน',
     emoji: '🍭',
     colors: [Color(0xFFFFF1F2), Color(0xFFFDA4AF)],
     accent: Color(0xFFE11D48),
@@ -1736,7 +1631,7 @@ const List<WorldTheme> kWorlds = [
     boss: MonsterTemplate('ราชินีเค้กยักษ์', kLookBossCandy),
   ),
   WorldTheme(
-    name: 'Ocean Deep',
+    name: 'ใต้มหาสมุทร',
     emoji: '🌊',
     colors: [Color(0xFFF0FDFA), Color(0xFF5EEAD4)],
     accent: Color(0xFF0D9488),
@@ -1749,7 +1644,7 @@ const List<WorldTheme> kWorlds = [
     boss: MonsterTemplate('จ้าวสมุทรตาเดียว', kLookBossOcean),
   ),
   WorldTheme(
-    name: 'Desert Ruins',
+    name: 'เมืองร้างกลางทะเลทราย',
     emoji: '🏜️',
     colors: [Color(0xFFFEFCE8), Color(0xFFFDE047)],
     accent: Color(0xFFCA8A04),
@@ -1762,7 +1657,7 @@ const List<WorldTheme> kWorlds = [
     boss: MonsterTemplate('ฟาโรห์ตาทอง', kLookBossDesert),
   ),
   WorldTheme(
-    name: 'Frozen Peak',
+    name: 'ยอดเขาน้ำแข็ง',
     emoji: '❄️',
     colors: [Color(0xFFF0F9FF), Color(0xFFBAE6FD)],
     accent: Color(0xFF0284C7),
@@ -1775,7 +1670,7 @@ const List<WorldTheme> kWorlds = [
     boss: MonsterTemplate('ราชันเยือกแข็ง', kLookBossFrost),
   ),
   WorldTheme(
-    name: 'Starry Space',
+    name: 'อวกาศดวงดาว',
     emoji: '🚀',
     colors: [Color(0xFFEEF2FF), Color(0xFF818CF8)],
     accent: Color(0xFF4F46E5),
@@ -1788,7 +1683,7 @@ const List<WorldTheme> kWorlds = [
     boss: MonsterTemplate('ราชันดาวมืด', kLookBossSpace),
   ),
   WorldTheme(
-    name: 'Rainbow Palace',
+    name: 'วังสายรุ้ง',
     emoji: '🌈',
     colors: [Color(0xFFFDF2F8), Color(0xFFF0ABFC)],
     accent: Color(0xFFC026D3),
@@ -1806,22 +1701,23 @@ WorldTheme worldOf(int level) => kWorlds[((level - 1) ~/ 5).clamp(0, kWorlds.len
 bool isBossLevel(int level) => level % 5 == 0;
 DifficultyLevel difficultyOfLevel(int level) =>
     level <= 6 ? DifficultyLevel.easy : (level <= 13 ? DifficultyLevel.medium : DifficultyLevel.hard);
-int wavesOfLevel(int level) => math.min(5, 2 + level ~/ 8); // 2 → 5 เวฟ (เวฟสุดท้ายของด่านที่หาร 5 ลงตัวคือบอส)
+int wavesOfLevel(int level) => math.min(5, 2 + level ~/ 8); 
+int heroMaxHpOf(int level) => 100 + (level - 1) * 6;
 
 class PowerUpInfo {
   final String id;
   final String emoji;
   final String name;
   final String desc;
-  final int price;
+  final int price; // real coins (the server has the same prices)
   const PowerUpInfo({required this.id, required this.emoji, required this.name, required this.desc, required this.price});
 }
 
 const List<PowerUpInfo> kPowerUps = [
-  PowerUpInfo(id: 'hint', emoji: '🧭', name: '50:50', desc: 'ตัดตัวเลือกผิดออก 2 ข้อ', price: 40),
-  PowerUpInfo(id: 'freeze', emoji: '⏳', name: 'Time Freeze', desc: 'หยุดเวลาคิดของมอนสเตอร์ 3 วินาที', price: 35),
-  PowerUpInfo(id: 'smoke', emoji: '💨', name: 'Smoke Bomb', desc: 'มอนสเตอร์ลังเล ตอบช้าลง 2 วินาที', price: 30),
-  PowerUpInfo(id: 'shield', emoji: '🛡️', name: 'Shield', desc: 'กันดาเมจจากการโดนแย่งตอบ 1 ครั้ง', price: 45),
+  PowerUpInfo(id: 'hint', emoji: '🧭', name: '50:50', desc: 'ตัดตัวเลือกผิดออก 2 ข้อ', price: 10),
+  PowerUpInfo(id: 'freeze', emoji: '⏳', name: 'หยุดเวลา', desc: 'หยุดเวลาคิดของมอนสเตอร์ 3 วินาที', price: 10),
+  PowerUpInfo(id: 'smoke', emoji: '💨', name: 'ระเบิดควัน', desc: 'มอนสเตอร์ลังเล ตอบช้าลง 2 วินาที', price: 8),
+  PowerUpInfo(id: 'shield', emoji: '🛡️', name: 'โล่ป้องกัน', desc: 'กันดาเมจจากการโดนแย่งตอบ 1 ครั้ง', price: 12),
 ];
 
 // ==========================================
@@ -1830,7 +1726,22 @@ const List<PowerUpInfo> kPowerUps = [
 class MonsterProgress extends ChangeNotifier {
   final List<int> stars = List<int>.filled(kMonsterLevels, 0);
   final Map<String, int> items = {'hint': 3, 'freeze': 3, 'smoke': 2, 'shield': 2};
-  int gold = 0;
+  bool buying = false; // a purchase is being sent
+  Set<int> unfinished = {}; // levels left in the middle (the "ต่อ" marks)
+
+  Future<void> _loadUnfinished() async {
+    final result = <int>{};
+    for (int level = 1; level <= kMonsterLevels; level++) {
+      final r = await MonsterResume.load(level, waves: wavesOfLevel(level), maxHp: heroMaxHpOf(level));
+      if (r != null) result.add(level);
+    }
+    unfinished = result;
+  }
+
+  void markUnfinished(int level, bool on) {
+    final changed = on ? unfinished.add(level) : unfinished.remove(level);
+    if (changed) notifyListeners();
+  }
   int bestCombo = 0;
   int kills = 0;
   int bossKills = 0;
@@ -1850,59 +1761,104 @@ class MonsterProgress extends ChangeNotifier {
   static String _key(DateTime d) => '${d.year}-${d.month}-${d.day}';
   bool get canClaimDaily => lastDaily != _key(DateTime.now());
 
-  Future<void> load() async {
-    try {
-      final p = await SharedPreferences.getInstance();
-      final saved = p.getStringList('mb_stars');
-      if (saved != null) {
-        for (int i = 0; i < math.min(saved.length, kMonsterLevels); i++) {
-          stars[i] = int.tryParse(saved[i]) ?? 0;
-        }
-      }
-      gold = p.getInt('mb_gold') ?? 0;
-      bestCombo = p.getInt('mb_best_combo') ?? 0;
-      kills = p.getInt('mb_kills') ?? 0;
-      bossKills = p.getInt('mb_boss_kills') ?? 0;
-      dailyStreak = p.getInt('mb_daily_streak') ?? 0;
-      lastDaily = p.getString('mb_last_daily') ?? '';
-      for (final id in items.keys.toList()) {
-        items[id] = p.getInt('mb_item_$id') ?? items[id]!;
-      }
-    } catch (_) {}
+  // ---------- saved per account, on the phone and on the server ----------
+
+  void _setDefaults() {
+    for (int i = 0; i < stars.length; i++) {
+      stars[i] = 0;
+    }
+    items
+      ..['hint'] = 3
+      ..['freeze'] = 3
+      ..['smoke'] = 2
+      ..['shield'] = 2;
+    bestCombo = 0;
+    kills = 0;
+    bossKills = 0;
+    dailyStreak = 0;
+    lastDaily = '';
   }
 
-  Future<void> _save() async {
-    try {
-      final p = await SharedPreferences.getInstance();
-      await p.setStringList('mb_stars', stars.map((s) => '$s').toList());
-      await p.setInt('mb_gold', gold);
-      await p.setInt('mb_best_combo', bestCombo);
-      await p.setInt('mb_kills', kills);
-      await p.setInt('mb_boss_kills', bossKills);
-      await p.setInt('mb_daily_streak', dailyStreak);
-      await p.setString('mb_last_daily', lastDaily);
-      for (final e in items.entries) {
-        await p.setInt('mb_item_${e.key}', e.value);
+  Map<String, dynamic> _toJson() => {
+        'stars': List<int>.of(stars),
+        'items': Map<String, int>.of(items),
+        'kills': kills,
+        'bossKills': bossKills,
+        'bestCombo': bestCombo,
+        'dailyStreak': dailyStreak,
+        'lastDaily': lastDaily,
+      };
+
+  void _apply(Map<String, dynamic> d) {
+    int n(dynamic v, int max) => v is int ? v.clamp(0, max).toInt() : 0;
+    final s = d['stars'];
+    if (s is List) {
+      for (int i = 0; i < kMonsterLevels; i++) {
+        stars[i] = i < s.length ? n(s[i], 3) : 0;
       }
-    } catch (_) {}
+    }
+    final it = d['items'];
+    if (it is Map) {
+      for (final id in items.keys.toList()) {
+        if (it[id] is int) items[id] = n(it[id], 9999);
+      }
+    }
+    kills = n(d['kills'], 10000000);
+    bossKills = n(d['bossKills'], 10000000);
+    bestCombo = n(d['bestCombo'], 100000);
+    dailyStreak = n(d['dailyStreak'], 100000);
+    lastDaily = d['lastDaily'] is String ? d['lastDaily'] as String : '';
   }
+
+  /// Loads the signed-in account's game (called each time the level list
+  /// opens, so another account never sees this one's progress).
+  Future<void> load() async {
+    if (CoinBalance.value.value == null) CoinBalance.refresh();
+    _setDefaults();
+    try {
+      final local = await MonsterStateSync.loadLocal();
+      if (local != null) {
+        _apply(local);
+      } else {
+        // Played with the old phone-only version: move it to this account.
+        final old = await MonsterStateSync.claimOldProgress();
+        if (old != null) {
+          _apply(old);
+          await MonsterStateSync.save(_toJson());
+        }
+      }
+      // Newer copy on the server (reinstalled / another phone)?
+      final server = await MonsterStateSync.pull()
+          .timeout(const Duration(seconds: 4), onTimeout: () => null);
+      if (server != null) _apply(server);
+      await MonsterResume.sync().timeout(const Duration(seconds: 4), onTimeout: () {});
+      await _loadUnfinished();
+    } catch (_) {}
+    notifyListeners();
+  }
+
+  Future<void> _save() => MonsterStateSync.save(_toJson());
 
   void _changed() {
     notifyListeners();
     _save();
   }
 
-  void addGold(int n) {
-    gold += n;
-    _changed();
-  }
-
-  bool buy(PowerUpInfo item) {
-    if (gold < item.price) return false;
-    gold -= item.price;
-    items[item.id] = (items[item.id] ?? 0) + 1;
-    _changed();
-    return true;
+  /// Buys 1 item with the account's real coins (on the server).
+  /// Returns a message to show when it didn't work.
+  Future<String?> buy(PowerUpInfo item) async {
+    if (buying) return null;
+    buying = true;
+    notifyListeners();
+    final r = await MonsterShop.buy(item.id);
+    buying = false;
+    if (r.ok) {
+      items[item.id] = (items[item.id] ?? 0) + 1;
+      _changed();
+    } else {
+      notifyListeners();
+    }
+    return r.error;
   }
 
   bool useItem(String id) {
@@ -1936,35 +1892,31 @@ class MonsterProgress extends ChangeNotifier {
     _changed();
   }
 
-  int claimDaily() {
+  /// Today's reward: 1 item (a different one each day) and a free shield
+  /// every 3rd day in a row. Returns what was given ('' = already taken).
+  String claimDaily() {
     final now = DateTime.now();
     final today = _key(now);
-    if (lastDaily == today) return 0;
+    if (lastDaily == today) return '';
     final yesterday = _key(now.subtract(const Duration(days: 1)));
     dailyStreak = lastDaily == yesterday ? dailyStreak + 1 : 1;
     lastDaily = today;
-    final reward = 30 + math.min(dailyStreak, 7) * 10;
-    gold += reward;
+    final id = dailyItemId(dailyStreak);
+    items[id] = (items[id] ?? 0) + 1;
     if (dailyStreak % 3 == 0) items['shield'] = (items['shield'] ?? 0) + 1;
     _changed();
-    return reward;
+    return dailyRewardText(dailyStreak);
+  }
+
+  static String dailyItemId(int streak) => const ['hint', 'freeze', 'smoke'][(streak - 1) % 3];
+
+  static String dailyRewardText(int streak) {
+    final info = kPowerUps.firstWhere((p) => p.id == dailyItemId(streak));
+    return '${info.name} 1 ชิ้น${streak % 3 == 0 ? ' + โล่ป้องกัน 1 อัน' : ''}';
   }
 
   Future<void> reset() async {
-    for (int i = 0; i < stars.length; i++) {
-      stars[i] = 0;
-    }
-    items
-      ..['hint'] = 3
-      ..['freeze'] = 3
-      ..['smoke'] = 2
-      ..['shield'] = 2;
-    gold = 0;
-    bestCombo = 0;
-    kills = 0;
-    bossKills = 0;
-    dailyStreak = 0;
-    lastDaily = '';
+    _setDefaults();
     notifyListeners();
     await _save();
   }
@@ -2057,30 +2009,6 @@ class _LevelSelectView extends StatelessWidget {
     );
   }
 
-  // ---------- สีของการ์ดแต่ละโลก ----------
-  static const List<Color> _worldBorder = [
-    Color(0xFFA7E8B0), Color(0xFF8EC9F5), Color(0xFFFDB863), Color(0xFFA5D8FF),
-    Color(0xFFFFB3C7), Color(0xFF7FE3D6), Color(0xFFFDE68A), Color(0xFFBAE6FD),
-    Color(0xFFA5B4FC), Color(0xFFF5B8F0),
-  ];
-  static const List<List<Color>> _worldBg = [
-    [Color(0xFF58BE5C), Color(0xFF2F8F46)],
-    [Color(0xFF4A4DB8), Color(0xFF7EC3F5)],
-    [Color(0xFFF58B2A), Color(0xFFC2410C)],
-    [Color(0xFF5B9BF0), Color(0xFFBFE0FF)],
-    [Color(0xFFF472B6), Color(0xFFFFC4DA)],
-    [Color(0xFF0E7490), Color(0xFF5EEAD4)],
-    [Color(0xFFD9A441), Color(0xFFFDE68A)],
-    [Color(0xFF38BDF8), Color(0xFFE0F2FE)],
-    [Color(0xFF312E81), Color(0xFF6366F1)],
-    [Color(0xFFC026D3), Color(0xFFFBCFE8)],
-  ];
-  static const List<Color> _worldTitle = [
-    Color(0xFF123A1B), Colors.white, Color(0xFF3A1505), Colors.white,
-    Colors.white, Colors.white, Color(0xFF4A2F05), Color(0xFF08405F),
-    Colors.white, Colors.white,
-  ];
-
   Widget _tile(BuildContext context, int level) {
     final p = monsterProgress;
     final unlocked = p.isUnlocked(level);
@@ -2107,79 +2035,85 @@ class _LevelSelectView extends StatelessWidget {
     return GestureDetector(
       onTap: unlocked
           ? () => _openPreview(context, level)
-          : () => _snack(context, '🔒 ผ่านด่าน ${level - 1} ก่อนเพื่อปลดล็อก!'),
+          : () => _snack(context, 'ผ่านด่าน ${level - 1} ก่อนเพื่อปลดล็อก !'),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
+          Stack(
+            clipBehavior: Clip.none,
+            children: [
           AspectRatio(
-            aspectRatio: 1,
-            child: Stack(
-              clipBehavior: Clip.none,
-              children: [
-                Positioned.fill(
-                  child: Container(
-                    decoration: BoxDecoration(
-                      gradient: LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter, colors: face),
-                      borderRadius: BorderRadius.circular(14),
-                      border: Border.all(color: Colors.white.withAlpha(120), width: 2.5),
-                      boxShadow: [
-                        BoxShadow(color: edge, offset: const Offset(0, 4)),
-                        const BoxShadow(color: Color(0x33000000), offset: Offset(0, 7), blurRadius: 6),
-                      ],
-                    ),
-                    child: Stack(
-                      children: [
-                        // เงาวาวด้านบนของปุ่ม
-                        Positioned(
-                          top: 3,
-                          left: 6,
-                          right: 6,
-                          height: 12,
-                          child: Container(
-                            decoration: BoxDecoration(
-                              color: Colors.white.withAlpha(unlocked ? 60 : 45),
-                              borderRadius: BorderRadius.circular(8),
+              aspectRatio: 1,
+              child: Stack(
+                clipBehavior: Clip.none,
+                children: [
+                  Positioned.fill(
+                    child: Container(
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter, colors: face),
+                        borderRadius: BorderRadius.circular(14),
+                        border: Border.all(color: Colors.white.withAlpha(120), width: 2.5),
+                        boxShadow: [
+                          BoxShadow(color: edge, offset: const Offset(0, 4)),
+                          const BoxShadow(color: Color(0x33000000), offset: Offset(0, 7), blurRadius: 6),
+                        ],
+                      ),
+                      child: Stack(
+                        children: [
+                          // เงาวาวด้านบนของปุ่ม
+                          Positioned(
+                            top: 3,
+                            left: 6,
+                            right: 6,
+                            height: 12,
+                            child: Container(
+                              decoration: BoxDecoration(
+                                color: Colors.white.withAlpha(unlocked ? 60 : 45),
+                                borderRadius: BorderRadius.circular(8),
+                              ),
                             ),
                           ),
-                        ),
-                        Center(
-                          child: unlocked
-                              ? Text(
-                                  '$level',
-                                  style: const TextStyle(
-                                    fontSize: 28,
-                                    fontWeight: FontWeight.w900,
-                                    color: Colors.white,
-                                    shadows: [Shadow(color: Color(0x66000000), offset: Offset(0, 2))],
+                          Center(
+                            child: unlocked
+                                ? Text(
+                                    '$level',
+                                    style: const TextStyle(
+                                      fontSize: 28,
+                                      fontWeight: FontWeight.w900,
+                                      color: Colors.white,
+                                      shadows: [Shadow(color: Color(0x66000000), offset: Offset(0, 2))],
+                                    ),
+                                  )
+                                : Column(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      const Icon(Icons.lock_rounded, color: Color(0xFF4B5563), size: 22),
+                                      Text('$level', style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w900, color: Color(0xFF4B5563))),
+                                    ],
                                   ),
-                                )
-                              : Column(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    const Icon(Icons.lock_rounded, color: Color(0xFF4B5563), size: 22),
-                                    Text('$level', style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w900, color: Color(0xFF4B5563))),
-                                  ],
-                                ),
-                        ),
-                      ],
+                          ),
+                        ],
+                      ),
                     ),
                   ),
-                ),
-                if (boss)
-                  Positioned(
-                    top: -10,
-                    right: -8,
-                    child: unlocked
-                        ? const Text('👑', style: TextStyle(fontSize: 22))
-                        : const Icon(
-                            Icons.lock_rounded,
-                            color: Color(0xFFFFC107),
-                            size: 18,
-                            shadows: [Shadow(color: Color(0xFF7A5200), offset: Offset(1, 1))],
-                          ),
-                  ),
-              ],
+                ],
+              ),
             ),
+              if (unlocked && p.unfinished.contains(level))
+                Positioned(
+                  top: -7,
+                  right: -6,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFDB2777),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: Colors.white, width: 1.5),
+                    ),
+                    child: const Text('▶ ต่อ', style: TextStyle(fontSize: 9, fontWeight: FontWeight.w900, color: Colors.white)),
+                  ),
+                ),
+            ],
           ),
           const SizedBox(height: 6),
           SizedBox(
@@ -2204,97 +2138,38 @@ class _LevelSelectView extends StatelessWidget {
     );
   }
 
-  Widget _worldSection(BuildContext context, int wi) {
-    final w = kWorlds[wi];
-    final start = wi * 5 + 1;
-    int worldCleared = 0;
-    for (int l = start; l < start + 5; l++) {
-      if (monsterProgress.stars[l - 1] > 0) worldCleared++;
-    }
-    final Color titleColor = _worldTitle[wi];
-    final bool whiteTitle = titleColor == Colors.white;
-
+  /// ด่าน 1–40 เรียงต่อกัน แถวละ 4 ด่าน (ไม่แบ่งเป็นโลก)
+  Widget _levelGrid(BuildContext context) {
+    const int perRow = 4;
+    final int rows = (kMonsterLevels + perRow - 1) ~/ perRow;
     return Container(
-      margin: const EdgeInsets.only(bottom: 14),
+      padding: const EdgeInsets.fromLTRB(12, 16, 12, 6),
       decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.92),
         borderRadius: BorderRadius.circular(26),
-        border: Border.all(color: _worldBorder[wi], width: 4),
+        border: Border.all(color: const Color(0xFFF9A8D4), width: 4),
         boxShadow: const [BoxShadow(color: Color(0x33000000), offset: Offset(0, 4), blurRadius: 8)],
       ),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(22),
-        child: Container(
-          decoration: BoxDecoration(
-            gradient: LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter, colors: _worldBg[wi]),
-          ),
-          child: CustomPaint(
-            painter: _WorldBackdropPainter(wi),
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(12, 10, 12, 8),
-              child: Column(
+      child: Column(
+        children: [
+          for (int r = 0; r < rows; r++)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 12),
+              child: Row(
                 children: [
-                  Row(
-                    children: [
-                      Text(w.emoji, style: const TextStyle(fontSize: 22)),
-                      const SizedBox(width: 6),
-                      Expanded(
-                        child: Text(
-                          w.name,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            fontSize: 17,
-                            fontWeight: FontWeight.w900,
-                            color: titleColor,
-                            shadows: whiteTitle ? const [Shadow(color: Color(0x55000000), offset: Offset(0, 1.5))] : null,
-                          ),
-                        ),
-                      ),
-                      for (final m in w.minions)
-                        Padding(
-                          padding: const EdgeInsets.symmetric(horizontal: 1),
-                          child: MonsterAvatar(look: m.look, size: 30),
-                        ),
-                      const SizedBox(width: 10),
-                      Container(
-                        width: 18,
-                        height: 18,
-                        decoration: BoxDecoration(
-                          color: worldCleared > 0 ? const Color(0xFF22C55E) : Colors.white.withAlpha(70),
-                          borderRadius: BorderRadius.circular(5),
-                          border: Border.all(color: Colors.white, width: 1.5),
-                        ),
-                        child: worldCleared > 0 ? const Icon(Icons.check_rounded, size: 13, color: Colors.white) : null,
-                      ),
-                      const SizedBox(width: 4),
-                      Text(
-                        '$worldCleared/5',
-                        style: const TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w900,
-                          color: Colors.white,
-                          shadows: [Shadow(color: Color(0x66000000), offset: Offset(0, 1.5))],
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 12),
-                  Row(
-                    children: List.generate(
-                      5,
-                      (i) => Expanded(
-                        child: Padding(
-                          padding: const EdgeInsets.symmetric(horizontal: 4),
-                          child: _tile(context, start + i),
-                        ),
+                  for (int c = 0; c < perRow; c++)
+                    Expanded(
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 6),
+                        child: r * perRow + c < kMonsterLevels
+                            ? _tile(context, r * perRow + c + 1)
+                            : const SizedBox.shrink(),
                       ),
                     ),
-                  ),
                 ],
               ),
             ),
-          ),
-        ),
+        ],
       ),
     );
   }
@@ -2324,7 +2199,7 @@ class _LevelSelectView extends StatelessWidget {
       builder: (ctx) => AlertDialog(
         backgroundColor: Colors.white,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
-        title: const Text('👋 ออกจากเกม?', textAlign: TextAlign.center, style: TextStyle(fontWeight: FontWeight.w900, color: Color(0xFFDB2777))),
+        title: const Text('👋 ออกจากเกม ?', textAlign: TextAlign.center, style: TextStyle(fontWeight: FontWeight.w900, color: Color(0xFFDB2777))),
         content: const Text('ความคืบหน้าถูกบันทึกไว้แล้วนะ', textAlign: TextAlign.center),
         actionsAlignment: MainAxisAlignment.center,
         actions: [
@@ -2351,16 +2226,16 @@ class _LevelSelectView extends StatelessWidget {
       builder: (ctx) => AlertDialog(
         backgroundColor: Colors.white,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
-        title: const Text('📅 รางวัลรายวัน', textAlign: TextAlign.center, style: TextStyle(fontWeight: FontWeight.w900, color: Color(0xFFDB2777))),
+        title: const Text('รางวัลรายวัน', textAlign: TextAlign.center, style: TextStyle(fontWeight: FontWeight.w900, color: Color(0xFFDB2777))),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Text('เข้าเล่นต่อเนื่อง $nextStreak วัน 🔥', style: const TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF1E293B))),
+            Text('เข้าเล่นต่อเนื่อง $nextStreak วัน', style: const TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF1E293B))),
             const SizedBox(height: 8),
             Text(
               canClaim
-                  ? 'วันนี้รับได้ ${30 + math.min(nextStreak, 7) * 10} 💰${nextStreak % 3 == 0 ? ' + โล่ป้องกัน 🛡️' : ''}'
-                  : 'วันนี้รับไปแล้ว พรุ่งนี้มาใหม่นะ!',
+                  ? 'วันนี้รับได้ ${MonsterProgress.dailyRewardText(nextStreak)}'
+                  : 'วันนี้รับไปแล้ว พรุ่งนี้มาใหม่นะ !',
               textAlign: TextAlign.center,
               style: const TextStyle(color: Color(0xFF64748B)),
             ),
@@ -2377,10 +2252,10 @@ class _LevelSelectView extends StatelessWidget {
                 ? () {
                     final reward = p.claimDaily();
                     Navigator.pop(ctx);
-                    _snack(context, '🎁 ได้รับ $reward 💰');
+                    _snack(context, 'ได้รับ $reward');
                   }
                 : null,
-            child: Text(canClaim ? 'รับรางวัล 🎁' : 'รับแล้ว ✓'),
+            child: Text(canClaim ? 'รับรางวัล' : 'รับแล้ว'),
           ),
         ],
       ),
@@ -2391,19 +2266,19 @@ class _LevelSelectView extends StatelessWidget {
     final p = monsterProgress;
     final int cleared = p.stars.where((s) => s > 0).length;
     final list = <List<dynamic>>[
-      ['⚔️', 'First Victory', 'ผ่านด่านแรก', cleared > 0],
-      ['⭐', 'Perfect!', 'ผ่านด่านโดยมี HP เหลือ 70% ขึ้นไป', p.stars.any((s) => s >= 3)],
-      ['👑', 'Boss Slayer', 'ล้มบอสครั้งแรก', p.bossKills >= 1],
-      ['🔥', 'Combo Master', 'ทำคอมโบ x8 ขึ้นไป', p.bestCombo >= 8],
-      ['🗡️', 'Monster Hunter', 'ล้มมอนสเตอร์ 50 ตัว (${p.kills}/50)', p.kills >= 50],
-      ['🌟', 'Level Master', 'ผ่านครบ ${kMonsterLevels} ด่าน ($cleared/$kMonsterLevels)', cleared >= kMonsterLevels],
+      ['⚔️', 'ชัยชนะแรก', 'ผ่านด่านแรก', cleared > 0],
+      ['⭐', 'ไร้ที่ติ !', 'ผ่านด่านโดยมีเลือดเหลือ 70% ขึ้นไป', p.stars.any((s) => s >= 3)],
+      ['👑', 'นักล่าบอส', 'ล้มบอสครั้งแรก', p.bossKills >= 1],
+      ['🔥', 'เซียนคอมโบ', 'ทำคอมโบ x8 ขึ้นไป', p.bestCombo >= 8],
+      ['🗡️', 'นักล่ามอนสเตอร์', 'ล้มมอนสเตอร์ 50 ตัว (${p.kills} / 50)', p.kills >= 50],
+      ['🌟', 'เจ้าแห่งด่าน', 'ผ่านครบ $kMonsterLevels ด่าน ($cleared / $kMonsterLevels)', cleared >= kMonsterLevels],
     ];
     showDialog<void>(
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: Colors.white,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
-        title: const Text('🏅 Achievements', textAlign: TextAlign.center, style: TextStyle(fontWeight: FontWeight.w900, color: Color(0xFFDB2777))),
+        title: const Text('🏅 ความสำเร็จ', textAlign: TextAlign.center, style: TextStyle(fontWeight: FontWeight.w900, color: Color(0xFFDB2777))),
         content: SizedBox(
           width: double.maxFinite,
           child: ListView(
@@ -2431,8 +2306,8 @@ class _LevelSelectView extends StatelessWidget {
       builder: (ctx) => AlertDialog(
         backgroundColor: Colors.white,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
-        title: const Text('⚙️ Settings', textAlign: TextAlign.center, style: TextStyle(fontWeight: FontWeight.w900, color: Color(0xFFDB2777))),
-        content: const Text('รีเซ็ตความคืบหน้า Gold และไอเทมทั้งหมดกลับเป็นค่าเริ่มต้น?', textAlign: TextAlign.center),
+        title: const Text('ตั้งค่า', textAlign: TextAlign.center, style: TextStyle(fontWeight: FontWeight.w900, color: Color(0xFFDB2777))),
+        content: const Text('รีเซ็ตความคืบหน้าและไอเทมทั้งหมดกลับเป็นค่าเริ่มต้น ?\n(เหรียญไม่หาย)\n(ต้องใช้รหัส PIN ผู้ปกครอง)', textAlign: TextAlign.center),
         actionsAlignment: MainAxisAlignment.center,
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('ยกเลิก')),
@@ -2442,6 +2317,9 @@ class _LevelSelectView extends StatelessWidget {
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
             onPressed: () async {
               Navigator.pop(ctx);
+              // Only a parent may wipe the child's progress.
+              final allowed = await showParentPinPrompt(context, title: 'ผู้ปกครองยืนยันก่อนรีเซ็ต');
+              if (!allowed) return;
               await monsterProgress.reset();
             },
             child: const Text('รีเซ็ต'),
@@ -2488,7 +2366,7 @@ class _LevelSelectView extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 8),
-          Text(label, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w900, color: Color(0xFF1E3A8A))),
+          Text(label, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w900, color: Color(0xFF1E3A8A))),
         ],
       ),
     );
@@ -2502,7 +2380,7 @@ class _LevelSelectView extends StatelessWidget {
       children: [
         const Text(
           'ความคืบหน้าของมอนสเตอร์',
-          style: TextStyle(fontSize: 11, fontWeight: FontWeight.w800, color: Color(0xFF4A2B3A)),
+          style: TextStyle(fontSize: 14, fontWeight: FontWeight.w800, color: Color(0xFF4A2B3A)),
         ),
         const SizedBox(height: 4),
         FractionallySizedBox(
@@ -2533,29 +2411,6 @@ class _LevelSelectView extends StatelessWidget {
     );
   }
 
-  // มอนสเตอร์บนแท่นเงิน
-  Widget _pedestalMonster(MonsterLook look) {
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        MonsterAvatar(look: look, size: 54),
-        Transform.translate(
-          offset: const Offset(0, -7),
-          child: Container(
-            width: 56,
-            height: 13,
-            decoration: BoxDecoration(
-              gradient: const LinearGradient(colors: [Color(0xFFF3F4F6), Color(0xFF9CA3AF), Color(0xFFE5E7EB)]),
-              borderRadius: const BorderRadius.all(Radius.elliptical(28, 7)),
-              border: Border.all(color: Colors.white, width: 1.2),
-              boxShadow: const [BoxShadow(color: Color(0x44000000), offset: Offset(0, 3), blurRadius: 3)],
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-
   Widget _selectLevelBanner() {
     return Container(
       padding: const EdgeInsets.all(3),
@@ -2577,7 +2432,7 @@ class _LevelSelectView extends StatelessWidget {
         child: const FittedBox(
           fit: BoxFit.scaleDown,
           child: Text(
-            'SELECT LEVEL',
+            'เลือกด่าน',
             style: TextStyle(
               fontSize: 25,
               fontWeight: FontWeight.w900,
@@ -2610,17 +2465,6 @@ class _LevelSelectView extends StatelessWidget {
         child: Row(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Container(
-              width: 36,
-              height: 36,
-              decoration: BoxDecoration(
-                gradient: const LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter, colors: [Color(0xFFFFB43A), Color(0xFFF08A0C)]),
-                borderRadius: BorderRadius.circular(10),
-                border: Border.all(color: Colors.white, width: 2),
-              ),
-              child: const Icon(Icons.arrow_left_rounded, color: Colors.white, size: 34),
-            ),
-            const SizedBox(width: 14),
             const Text(
               'ย้อนกลับ',
               style: TextStyle(
@@ -2680,19 +2524,15 @@ class _LevelSelectView extends StatelessWidget {
                             child: Row(
                               crossAxisAlignment: CrossAxisAlignment.center,
                               children: [
-                                _pedestalMonster(kLookBlueEars),
-                                const SizedBox(width: 2),
                                 Expanded(child: _selectLevelBanner()),
-                                const SizedBox(width: 2),
-                                _pedestalMonster(kLookPurpleUnicorn),
                               ],
                             ),
                           ),
                           const SizedBox(height: 6),
                           Expanded(
-                            child: ListView(
+                            child: SingleChildScrollView(
                               padding: const EdgeInsets.fromLTRB(14, 6, 14, 8),
-                              children: List.generate(kWorlds.length, (wi) => _worldSection(context, wi)),
+                              child: _levelGrid(context),
                             ),
                           ),
                         ],
@@ -2717,7 +2557,7 @@ class _LevelSelectView extends StatelessWidget {
                           mainAxisAlignment: MainAxisAlignment.spaceBetween,
                           children: [
                             _bottomIcon(
-                              label: 'DAILY',
+                              label: 'รายวัน',
                               icon: Icons.calendar_month_rounded,
                               colors: const [Color(0xFFFFB43A), Color(0xFFF08A0C)],
                               shadow: const Color(0xFFB45309),
@@ -2725,14 +2565,14 @@ class _LevelSelectView extends StatelessWidget {
                               onTap: () => _openDaily(context),
                             ),
                             _bottomIcon(
-                              label: 'ACHIEVEMENTS',
+                              label: 'ความสำเร็จ',
                               icon: Icons.emoji_events_rounded,
                               colors: const [Color(0xFFFF5FA8), Color(0xFFD9327F)],
                               shadow: const Color(0xFF9D174D),
                               onTap: () => _openAchievements(context),
                             ),
                             _bottomIcon(
-                              label: 'SETTINGS',
+                              label: 'ตั้งค่า',
                               icon: Icons.settings_rounded,
                               colors: const [Color(0xFF9B7BFF), Color(0xFF6D3FE0)],
                               shadow: const Color(0xFF4C1D95),
@@ -2755,104 +2595,6 @@ class _LevelSelectView extends StatelessWidget {
 
 // ---------------------------------------------------------------
 // ลวดลายพื้นหลังการ์ดโลกในหน้าเลือกด่าน (วาดด้วยโค้ด ไม่ต้องใช้รูป)
-// ---------------------------------------------------------------
-class _WorldBackdropPainter extends CustomPainter {
-  final int world;
-  const _WorldBackdropPainter(this.world);
-
-  // สุ่มแบบคงที่ (ผลเหมือนเดิมทุกครั้งที่วาด)
-  double _r(int i, double k) {
-    final double v = math.sin(i * 12.9898 + k * 78.233) * 43758.5453;
-    return v - v.floorToDouble();
-  }
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final double w = size.width;
-    final double h = size.height;
-    final Paint paint = Paint();
-
-    // แสงนุ่มๆ มุมบนซ้าย
-    paint.shader = RadialGradient(
-      colors: [Colors.white.withOpacity(0.30), Colors.white.withOpacity(0)],
-    ).createShader(Rect.fromCircle(center: Offset(w * 0.2, 0), radius: h));
-    canvas.drawRect(Offset.zero & size, paint);
-    paint.shader = null;
-
-    switch (world) {
-      case 0: // ป่า: ใบไม้
-        for (int i = 0; i < 14; i++) {
-          canvas.save();
-          canvas.translate(w * _r(i, 1), h * _r(i, 2));
-          canvas.rotate((_r(i, 3) - 0.5) * 2.4);
-          paint.color = (i.isEven ? const Color(0xFF1E6B2E) : const Color(0xFF9BE58F)).withOpacity(0.35);
-          canvas.drawOval(Rect.fromCenter(center: Offset.zero, width: 44 + 20 * _r(i, 4), height: 18), paint);
-          canvas.restore();
-        }
-        break;
-      case 1: // ถ้ำคริสตัล: ผลึกด้านล่าง + ประกาย
-        final Paint edge = Paint()
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = 1.2
-          ..color = Colors.white.withOpacity(0.6);
-        for (int i = 0; i < 9; i++) {
-          final double x = w * (i + 0.5) / 9 + (_r(i, 1) - 0.5) * 18;
-          final double ht = 22 + 34 * _r(i, 2);
-          final double bw = 9 + 8 * _r(i, 3);
-          final Path path = Path()
-            ..moveTo(x - bw, h)
-            ..lineTo(x - bw * 0.6, h - ht * 0.7)
-            ..lineTo(x, h - ht)
-            ..lineTo(x + bw * 0.6, h - ht * 0.7)
-            ..lineTo(x + bw, h)
-            ..close();
-          paint.color = (i.isEven ? const Color(0xFF9EE7FF) : const Color(0xFFC9B6FF)).withOpacity(0.55);
-          canvas.drawPath(path, paint);
-          canvas.drawPath(path, edge);
-        }
-        for (int i = 0; i < 8; i++) {
-          paint.color = Colors.white.withOpacity(0.8);
-          canvas.drawCircle(Offset(w * _r(i, 5), h * _r(i, 6) * 0.8), 1.4 + 1.6 * _r(i, 7), paint);
-        }
-        break;
-      case 2: // ภูเขาไฟ: หินด้านบน + ลาวาด้านล่าง
-        paint.color = const Color(0xFF3B1204).withOpacity(0.35);
-        for (int i = 0; i < 6; i++) {
-          final double x = w * (i + 0.3) / 6;
-          final double ht = 14 + 22 * _r(i, 1);
-          canvas.drawPath(
-            Path()
-              ..moveTo(x - 18, 0)
-              ..lineTo(x, ht)
-              ..lineTo(x + 18, 0)
-              ..close(),
-            paint,
-          );
-        }
-        final Path lava = Path()
-          ..moveTo(0, h)
-          ..lineTo(0, h * 0.86);
-        for (int i = 0; i < 4; i++) {
-          final double x0 = w * i / 4;
-          lava.quadraticBezierTo(x0 + w / 8, h * (i.isEven ? 0.76 : 0.96), x0 + w / 4, h * 0.86);
-        }
-        lava
-          ..lineTo(w, h)
-          ..close();
-        paint.color = const Color(0xFFFFD54A).withOpacity(0.55);
-        canvas.drawPath(lava, paint);
-        break;
-      default: // โลกอื่นๆ: ฟองและประกายนุ่มๆ
-        for (int i = 0; i < 12; i++) {
-          paint.color = Colors.white.withOpacity(0.16 + 0.12 * _r(i, 4));
-          canvas.drawCircle(Offset(w * _r(i, 1), h * _r(i, 2)), 3 + 9 * _r(i, 3), paint);
-        }
-    }
-  }
-
-  @override
-  bool shouldRepaint(covariant _WorldBackdropPainter old) => old.world != world;
-}
 
 // ==========================================
 // หน้าต่างพรีวิวด่าน + ร้านไอเทม
@@ -2886,10 +2628,9 @@ class _LevelPreviewSheet extends StatelessWidget {
                   Container(width: 44, height: 5, decoration: BoxDecoration(color: const Color(0xFFE2E8F0), borderRadius: BorderRadius.circular(3))),
                   const SizedBox(height: 12),
                   Text(
-                    '${world.emoji} LEVEL $level${boss ? '  👑 BOSS' : ''}',
-                    style: TextStyle(fontSize: 24, fontWeight: FontWeight.w900, color: boss ? const Color(0xFFDC2626) : world.accent),
+                    ' ด่าน $level${boss ? '  👑 บอส' : ''}',
+                    style: TextStyle(fontSize: 24, fontWeight: FontWeight.w900, color: boss ? const Color(0xFFDC2626) : const Color(0xFFDB2777)),
                   ),
-                  Text(world.name, style: const TextStyle(color: Color(0xFF64748B), fontWeight: FontWeight.bold)),
                   const SizedBox(height: 10),
                   Row(
                     mainAxisAlignment: MainAxisAlignment.center,
@@ -2906,14 +2647,14 @@ class _LevelPreviewSheet extends StatelessWidget {
                     children: [
                       _chip('⚔️ $waves เลเวล'),
                       _chip(cfg.title.split(' ')[0]),
-                      _chip('⏱️ ${cfg.timeLimit} วินาที/ข้อ'),
+                      _chip('⏱️ ${cfg.timeLimit} วินาที / ข้อ'),
                     ],
                   ),
                   const Divider(height: 26),
                   Row(
                     children: [
-                      const Expanded(child: Text('🎒 ไอเทมช่วยเล่น', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w900, color: Color(0xFF1E293B)))),
-                      Text('💰 ${monsterProgress.gold}', style: const TextStyle(fontWeight: FontWeight.w900, color: Color(0xFFC2560F))),
+                      const Expanded(child: Text('ไอเทมช่วยเล่น', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w900, color: Color(0xFF1E293B)))),
+                      const _CoinPill(fontSize: 14),
                     ],
                   ),
                   const SizedBox(height: 6),
@@ -2929,8 +2670,21 @@ class _LevelPreviewSheet extends StatelessWidget {
                         shadow: const Color(0xFFB45309),
                         radius: 12,
                         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                        onPressed: monsterProgress.gold >= item.price ? () => monsterProgress.buy(item) : null,
-                        child: Text('💰 ${item.price}', style: const TextStyle(fontSize: 13)),
+                        onPressed: monsterProgress.buying
+                            ? null
+                            : () async {
+                                final error = await monsterProgress.buy(item);
+                                if (error == null || !context.mounted) return;
+                                showDialog<void>(
+                                  context: context,
+                                  builder: (c) => AlertDialog(
+                                    content: Text(error, textAlign: TextAlign.center),
+                                    actionsAlignment: MainAxisAlignment.center,
+                                    actions: [TextButton(onPressed: () => Navigator.pop(c), child: const Text('ตกลง'))],
+                                  ),
+                                );
+                              },
+                        child: Text('${item.price} เหรียญ', style: const TextStyle(fontSize: 13)),
                       ),
                     ),
                   const SizedBox(height: 12),
@@ -2940,12 +2694,28 @@ class _LevelPreviewSheet extends StatelessWidget {
                       color: const Color(0xFF22C55E),
                       shadow: const Color(0xFF15803D),
                       padding: const EdgeInsets.symmetric(vertical: 14),
-                      onPressed: () {
+                      onPressed: () async {
                         final nav = Navigator.of(context);
+                        MonsterRound? resume = await MonsterResume.load(
+                          level,
+                          waves: wavesOfLevel(level),
+                          maxHp: heroMaxHpOf(level),
+                        );
+                        if (resume != null) {
+                          if (!context.mounted) return;
+                          final bool? goOn = await _askMonsterResume(context, level, resume);
+                          if (goOn == null) return;
+                          if (!goOn) {
+                            await MonsterResume.clear(level);
+                            monsterProgress.markUnfinished(level, false);
+                            resume = null;
+                          }
+                        }
+                        final MonsterRound? start = resume;
                         nav.pop();
-                        nav.push(MaterialPageRoute(builder: (_) => BattleScreen(level: level)));
+                        nav.push(MaterialPageRoute(builder: (_) => BattleScreen(level: level, resume: start)));
                       },
-                      child: const Text('▶  START', style: TextStyle(fontSize: 20)),
+                      child: const Text('เริ่มเลย', style: TextStyle(fontSize: 20)),
                     ),
                   ),
                 ],
@@ -2982,12 +2752,44 @@ class _BT {
   static const Color mauve = Color(0xFF8E6B9A);
 }
 
+/// "ด่าน 9 เล่นค้างไว้ … เล่นต่อ / เริ่มใหม่": true = go on, false = start again.
+Future<bool?> _askMonsterResume(BuildContext context, int level, MonsterRound r) {
+  const Color color = Color(0xFFDB2777);
+  return showDialog<bool>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      backgroundColor: Colors.white,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+      title: Text('ด่าน $level เล่นค้างไว้', textAlign: TextAlign.center, style: const TextStyle(fontWeight: FontWeight.w900, color: color)),
+      content: Text(
+        'ถึงเลเวล ${r.wave} / ${wavesOfLevel(level)} เลือดเหลือ ${r.heroHp} / ${heroMaxHpOf(level)}\nจะเล่นต่อเลยไหม ?',
+        textAlign: TextAlign.center,
+      ),
+      actionsAlignment: MainAxisAlignment.center,
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('เริ่มใหม่')),
+        _GameButton(
+          color: const Color(0xFF22C55E),
+          shadow: const Color(0xFF15803D),
+          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
+          onPressed: () => Navigator.pop(ctx, true),
+          child: const Text('เล่นต่อ'),
+        ),
+      ],
+    ),
+  );
+}
+
 class BattleScreen extends StatefulWidget {
   final int level;
+
+  /// The level left in the middle, to continue (null = start it fresh).
+  final MonsterRound? resume;
 
   const BattleScreen({
     super.key,
     required this.level,
+    this.resume,
   });
 
   @override
@@ -2995,22 +2797,25 @@ class BattleScreen extends StatefulWidget {
 }
 
 class _BattleScreenState extends State<BattleScreen>
-    with TickerProviderStateMixin {
+    with TickerProviderStateMixin, WidgetsBindingObserver {
+  bool _paused = false; // stopped while the app is away / the leave question is open
+  bool _askingLeave = false; // "ออกจากด่าน ?" is on screen
+  int _dialogs = 0; // result dialogs open (the battle is waiting anyway)
+  final List<Future<GuessCoinResult>> _coinFutures = []; // real coins of this level
+  int _coinsBefore = 0; // coins of this level earned before "เล่นต่อ"
+  int _coinsNow = 0; // coins earned since the level was opened
+  double _ui = 1.0; // size of the word card and answer buttons (bigger on tall screens)
+  double get _gap => 8 * _ui; // one even gap between every part of the answer area
+
   late DifficultyConfig _diffConfig;
 
   final FlutterTts _flutterTts = FlutterTts();
-  final AudioPlayer _audioPlayer = AudioPlayer();
-  final AudioPlayer _bgm = AudioPlayer(); // ดนตรีเร้าใจช่วง Sudden Death
-  bool _suddenMusicOn = false;
+  bool _suddenMusicOn = false; // ช่วงตัดสินเริ่มแล้ว
 
-  String heroName = "Bamboo";
-  int heroLevel = 1;
+  String heroName = 'ฮีโร่'; // replaced by the account's name
   int heroMaxHp = 100;
   int heroCurrentHp = 100;
   int heroBaseAtk = 25;
-  int heroExp = 0;
-  int heroMaxExp = 50;
-  int heroGold = 0;
 
   int currentStage = 1; // เวฟปัจจุบันในด่านนี้
   final Set<String> _hiddenChoices = {}; // ถูกตัดด้วย 50:50
@@ -3074,7 +2879,7 @@ class _BattleScreenState extends State<BattleScreen>
   late int timeLeft;
   int _timeTotal = 15;
 
-  String combatLog = "การประลองเริ่มต้นขึ้นแล้ว!";
+  String combatLog = "การประลองเริ่มต้นขึ้นแล้ว !";
   Color logColor = const Color(0xFFDB2777);
 
   int comboStreak = 0;
@@ -3096,15 +2901,15 @@ class _BattleScreenState extends State<BattleScreen>
   late AnimationController _monsterLunge; // มอนสเตอร์พุ่งเข้าโจมตี
   int _questionSeq = 0;
   int _correctCount = 0;
-  String? _learnNote;
-  bool? _lastCorrect;
   final List<Map<String, String>> _missed = []; // คำที่ตอบพลาด ไว้ทบทวน
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _loadHeroName();
     _diffConfig = kDifficultyConfigs[difficultyOfLevel(widget.level)]!;
-    heroMaxHp = 100 + (widget.level - 1) * 6;
+    heroMaxHp = heroMaxHpOf(widget.level);
     heroCurrentHp = heroMaxHp;
     heroBaseAtk = 25 + (widget.level - 1) * 2;
     timeLeft = _diffConfig.timeLimit;
@@ -3122,8 +2927,43 @@ class _BattleScreenState extends State<BattleScreen>
     AvatarProfile.instance.addListener(_onAvatarChanged);
     AvatarProfile.instance.load();
 
+    final MonsterRound? resume = widget.resume;
+    if (resume != null) {
+      // Go on from the next monster, with the HP the hero had.
+      currentStage = resume.wave.clamp(1, _totalWaves).toInt();
+      heroCurrentHp = resume.heroHp.clamp(1, heroMaxHp).toInt();
+      _correctCount = resume.correct;
+      _coinsBefore = resume.coins;
+    } else {
+      _clearResume(); // a new game of this level
+    }
+
     _spawnMonster();
     _startRound();
+  }
+
+  // ---------- เล่นต่อจากมอนสเตอร์ตัวถัดไป (แยกตามบัญชี เก็บบนเซิร์ฟเวอร์) ----------
+
+  /// Saved after each monster (not the last one): leaving now, the child
+  /// comes back to the next monster with the same HP.
+  void _saveResume() {
+    final int next = currentStage + 1;
+    if (next > _totalWaves) return;
+    MonsterResume.save(
+      widget.level,
+      MonsterRound(
+        wave: next,
+        heroHp: math.min(heroMaxHp, heroCurrentHp + 20).clamp(1, heroMaxHp).toInt(),
+        correct: _correctCount,
+        coins: math.min(_coinsBefore + _coinsNow, _correctCount * 3),
+      ),
+    );
+    monsterProgress.markUnfinished(widget.level, true);
+  }
+
+  void _clearResume() {
+    MonsterResume.clear(widget.level);
+    monsterProgress.markUnfinished(widget.level, false);
   }
 
   Future<void> _initTts() async {
@@ -3140,12 +2980,7 @@ class _BattleScreenState extends State<BattleScreen>
     }
   }
 
-  void _playSound(String soundFileName) async {
-    try {
-      await _audioPlayer.stop();
-      await _audioPlayer.play(AssetSource('sounds/$soundFileName'));
-    } catch (_) {}
-  }
+
 
   void _onAvatarChanged() {
     if (mounted) setState(() {});
@@ -3180,6 +3015,7 @@ class _BattleScreenState extends State<BattleScreen>
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _cancelRoundTimers();
     _moodTimer?.cancel();
     _tickN.dispose();
@@ -3189,8 +3025,6 @@ class _BattleScreenState extends State<BattleScreen>
     _heroLunge.dispose();
     _monsterLunge.dispose();
     _flutterTts.stop();
-    _audioPlayer.dispose();
-    _bgm.dispose();
     AvatarProfile.instance.removeListener(_onAvatarChanged);
     super.dispose();
   }
@@ -3204,8 +3038,6 @@ class _BattleScreenState extends State<BattleScreen>
 
     final int baseHp = boss ? 130 : 60 + 30 * idx;
     final int baseAtk = boss ? 20 : 10 + 5 * idx;
-    final int baseExp = boss ? 80 : 25 + 10 * idx;
-    final int baseGold = boss ? 60 : 15 + 10 * idx;
 
     final int maxHp = (baseHp * scale * (boss ? 2.0 : 1.0)).round();
     final int atk = (baseAtk * scale * (boss ? 1.3 : 1.0) * _diffConfig.monsterAtkMultiplier).round();
@@ -3230,12 +3062,10 @@ class _BattleScreenState extends State<BattleScreen>
         maxHp: maxHp,
         currentHp: maxHp,
         atk: atk,
-        expReward: (baseExp * _diffConfig.rewardMultiplier).round(),
-        goldReward: (baseGold * _diffConfig.rewardMultiplier).round(),
       );
       combatLog = boss
-          ? '👑 บอส ${tpl.name} ท้าดวล! ${prof.tip}'
-          : '⚔️ ${tpl.name} ${prof.label} ท้าดวลความเร็ว! ${prof.tip}';
+          ? 'บอส ${tpl.name} ท้าดวล ${prof.tip}'
+          : '${tpl.name} ${prof.label} ท้าดวลความเร็ว ${prof.tip}';
       logColor = boss ? const Color(0xFFDC2626) : const Color(0xFFDB2777);
     });
     if (boss) {
@@ -3263,19 +3093,13 @@ class _BattleScreenState extends State<BattleScreen>
     _bubble = null;
   }
 
-  Future<void> _startSuddenMusic() async {
-    if (_suddenMusicOn) return;
+  void _startSuddenMusic() {
     _suddenMusicOn = true;
-    try {
-      await _bgm.setReleaseMode(ReleaseMode.loop);
-      await _bgm.play(AssetSource('sounds/sudden_death.mp3'), volume: 0.6);
-    } catch (_) {}
   }
 
   void _stopSuddenMusic() {
     if (!_suddenMusicOn) return;
     _suddenMusicOn = false;
-    _bgm.stop().catchError((_) {});
   }
 
   void _setMonsterMood(MonsterMood mood, {String? bubble, int ms = 1300}) {
@@ -3363,17 +3187,15 @@ class _BattleScreenState extends State<BattleScreen>
       _triedWrong.clear();
       _clashWrong.clear();
       _questionSeq++;
-      _learnNote = null;
-      _lastCorrect = null;
       _moodOverride = null;
       _bubble = null;
       currentQuestion = VocabQuestion(word: word, correctMeaning: correct, choices: choices, category: cat);
       _planMonster();
       if (sudden) {
-        combatLog = '🔥 SUDDEN DEATH! เหลือเวลาแค่ ${limit.round()} วินาที ตั้งสติแล้วลุย!';
+        combatLog = 'ช่วงตัดสิน เหลือเวลาแค่ ${limit.round()} วินาที ตั้งสติแล้วลุย';
         logColor = const Color(0xFFDC2626);
       } else if (_roundOfMonster > 0) {
-        combatLog = '⚡ แข่งกันตอบ! ใครไวกว่าได้โจมตีก่อน';
+        combatLog = 'แข่งกันตอบ ใครไวกว่าได้โจมตีก่อน';
         logColor = const Color(0xFFDB2777);
       }
     });
@@ -3381,7 +3203,7 @@ class _BattleScreenState extends State<BattleScreen>
 
     if (firstSudden) _startSuddenMusic();
     _speakWord(word);
-    _addFloatingText(sudden ? 'SUDDEN DEATH 🔥' : (bonus ? 'BONUS x2 ⭐' : 'READY?'),
+    _addFloatingText(sudden ? 'ช่วงตัดสิน' : (bonus ? 'โบนัส x2' : 'พร้อมไหม ?'),
         sudden ? const Color(0xFFDC2626) : (bonus ? const Color(0xFFD97706) : const Color(0xFFDB2777)),
         onRight: true, center: true, size: 26);
     _readyTimer = Timer(const Duration(milliseconds: 1000), _beginRace);
@@ -3390,7 +3212,7 @@ class _BattleScreenState extends State<BattleScreen>
   void _beginRace() {
     if (!mounted) return;
     setState(() => _phase = _Phase.racing);
-    _addFloatingText('GO! ⚡', const Color(0xFF16A34A), onRight: true, center: true, size: 32);
+    _addFloatingText('ลุย !', const Color(0xFF16A34A), onRight: true, center: true, size: 32);
     _ticker?.cancel();
     _ticker = Timer.periodic(Duration(milliseconds: (_tickSec * 1000).round()), (_) => _onTick());
   }
@@ -3440,29 +3262,28 @@ class _BattleScreenState extends State<BattleScreen>
       setState(() {
         _fogChoice = pick;
         _fogUntil = _elapsed + 2.0;
-        combatLog = '🎭 ${currentMonster.name} ปล่อยหมอกบังปุ่ม! รออีกนิดนะ ☁️';
+        combatLog = '${currentMonster.name} ปล่อยหมอกบังปุ่ม รออีกนิดนะ';
         logColor = const Color(0xFF7C3AED);
       });
     } else {
       setState(() {
         currentQuestion.choices.shuffle(_rnd);
-        combatLog = '🎭 ${currentMonster.name} สลับตำแหน่งปุ่ม! อ่านให้ดีก่อนกดนะ';
+        combatLog = '${currentMonster.name} สลับตำแหน่งปุ่ม อ่านให้ดีก่อนกดนะ';
         logColor = const Color(0xFF7C3AED);
       });
     }
-    _setMonsterMood(MonsterMood.laugh, bubble: 'ฮิฮิ ลองดูสิ! 😈');
+    _setMonsterMood(MonsterMood.laugh, bubble: 'ฮิฮิ ลองดูสิ');
   }
 
   // แถบความคิดของมอนสเตอร์เต็มแล้ว
   void _monsterFinished() {
     if (_monsterWillBeWrong) {
       // มอนสเตอร์ตอบผิดเอง -> งง ผู้เรียนยังตอบต่อได้
-      _playSound('wrong.mp3');
       setState(() {
         _monsterStunned = true;
         _moodOverride = MonsterMood.shocked;
-        _bubble = 'ตอบผิดซะแล้ว! 😵';
-        combatLog = '😵 ${currentMonster.name} ตอบผิดเอง! รีบตอบเลย!';
+        _bubble = 'ตอบผิดซะแล้ว';
+        combatLog = '${currentMonster.name} ตอบผิดเอง รีบตอบเลย';
         logColor = const Color(0xFF16A34A);
       });
     } else {
@@ -3470,7 +3291,7 @@ class _BattleScreenState extends State<BattleScreen>
       setState(() {
         _phase = _Phase.grace;
         _graceLeft = _graceSec;
-        combatLog = '❗ ${currentMonster.name} กำลังจะตอบ!! รีบเลย!';
+        combatLog = '${currentMonster.name} กำลังจะตอบ รีบเลย';
         logColor = const Color(0xFFDC2626);
       });
     }
@@ -3491,7 +3312,7 @@ class _BattleScreenState extends State<BattleScreen>
     _noteLearning(correct: false);
     setState(() {
       _phase = _Phase.resolved;
-      combatLog = '⏰ หมดเวลา! ไม่มีใครตอบได้ (คำตอบ: ${currentQuestion.correctMeaning})';
+      combatLog = 'หมดเวลา ไม่มีใครตอบได้ (คำตอบ : ${currentQuestion.correctMeaning})';
       logColor = const Color(0xFF64748B);
     });
     _checkBattleStatus();
@@ -3514,13 +3335,13 @@ class _BattleScreenState extends State<BattleScreen>
     }
 
     // ตอบผิด
+    Sfx.wrong();
     if (_retryLeft > 0) {
       _retryLeft--;
       HapticFeedback.lightImpact();
-      _playSound('wrong.mp3');
       setState(() {
         _triedWrong.add(selected);
-        combatLog = '🙈 ยังไม่ใช่นะ ลองอีกครั้ง! รีบก่อนมอนสเตอร์ตอบ';
+        combatLog = 'ยังไม่ใช่นะ ลองอีกครั้ง รีบก่อนมอนสเตอร์ตอบ';
         logColor = const Color(0xFFF59E0B);
       });
       return;
@@ -3530,10 +3351,19 @@ class _BattleScreenState extends State<BattleScreen>
 
   // ---------- ผู้เรียนตอบถูกก่อน -> โจมตีมอนสเตอร์ ----------
   void _heroWinsRound(String selected, {bool clash = false}) {
+    Sfx.correct();
     _ticker?.cancel();
     _clashTimer?.cancel();
-    _playSound('correct.mp3');
     _noteLearning(correct: true);
+    // Real coins: 3 per word per day (from the server).
+    final coinFuture = MonsterCoins.submit(currentQuestion.word);
+    _coinFutures.add(coinFuture);
+    coinFuture.then((r) {
+      _coinsNow += r.coins;
+      if (mounted && r.coins > 0) {
+        _addFloatingText('+${r.coins} เหรียญ', const Color(0xFFB45309), onRight: false, size: 16);
+      }
+    });
     _heroLunge.forward(from: 0.0);
     HapticFeedback.mediumImpact();
 
@@ -3555,9 +3385,7 @@ class _BattleScreenState extends State<BattleScreen>
     final bool isUltimate = comboStreak % 5 == 0;
     int damage = (heroBaseAtk * multiplier * comboBonus * (isUltimate ? 2.5 : 1.0)).round();
     if (_bonusRound) {
-      damage *= 2; // รอบโบนัส: ดาเมจ x2 + เหรียญพิเศษ
-      monsterProgress.addGold(10);
-      heroGold += 10;
+      damage *= 2; // รอบโบนัส: ดาเมจ x2
     }
 
     // Tug-of-War: ชนะติดๆ จนแถบถึงขอบ -> ผลักมอนสเตอร์ตกเหว (โบนัสดาเมจ)
@@ -3574,18 +3402,16 @@ class _BattleScreenState extends State<BattleScreen>
     final Color dmgColor = isUltimate
         ? const Color(0xFF7C3AED)
         : (pushed ? const Color(0xFFDC2626) : (isCrit ? const Color(0xFFF59E0B) : const Color(0xFFDB2777)));
-    _addFloatingText('${isUltimate ? '💥 ' : ''}-$damage', dmgColor, onRight: true);
+    _addFloatingText('-$damage', dmgColor, onRight: true);
     _hitController.forward(from: 0.0);
-    final bool bigHit = isCrit || isUltimate || pushed;
-    _addFloatingText(bigHit ? '💥' : '✨', const Color(0xFFF97316), onRight: true, size: bigHit ? 48 : 32);
-    _addFloatingText('⚡ ${t.toStringAsFixed(1)} วิ', const Color(0xFF0EA5E9), onRight: false, size: 18);
-    if (_bonusRound) _addFloatingText('⭐ BONUS x2 +10💰', const Color(0xFFD97706), onRight: false, size: 16);
+    _addFloatingText('${t.toStringAsFixed(1)} วิ', const Color(0xFF0EA5E9), onRight: false, size: 18);
+    if (_bonusRound) _addFloatingText('โบนัส x2', const Color(0xFFD97706), onRight: false, size: 16);
     if (isUltimate || pushed) _shakeController.forward(from: 0.0);
     final String praise = pushed
-        ? 'ผลักตกเหว! 🕳️'
+        ? 'ผลักตกเหว'
         : (clash
-            ? 'ชนะปะทะ! ⚔️'
-            : (isUltimate ? 'AMAZING! 💥' : (isCrit ? 'Perfect! ⚡' : (multiplier > 1 ? 'Great! 👍' : 'Good! 🙂'))));
+            ? 'ชนะปะทะ'
+            : (isUltimate ? 'สุดยอด' : (isCrit ? 'เยี่ยมมาก' : (multiplier > 1 ? 'เก่งมาก' : 'ดี'))));
     _addFloatingText(praise, isUltimate ? const Color(0xFF7C3AED) : const Color(0xFFF59E0B),
         onRight: true, center: true, size: 26);
 
@@ -3611,46 +3437,47 @@ class _BattleScreenState extends State<BattleScreen>
         healed = heroCurrentHp - before;
       }
 
-      final String stunNote = _monsterStunned ? ' (มอนสเตอร์พลาดเอง!)' : '';
+      final String stunNote = _monsterStunned ? ' (มอนสเตอร์พลาดเอง)' : '';
       if (enteredSudden) {
-        combatLog = '🔥 SUDDEN DEATH! ${currentMonster.name} เหลือเลือดนิดเดียว! รอบหน้าเวลาสั้นลงนะ!';
+        combatLog = 'ช่วงตัดสิน ${currentMonster.name} เหลือเลือดนิดเดียว รอบหน้าเวลาสั้นลงนะ';
         logColor = const Color(0xFFDC2626);
       } else if (justEnraged) {
-        combatLog = '😡 ${currentMonster.name} โกรธจัด! ATK เพิ่มขึ้น 1.5 เท่า! ระวังให้ดี!';
+        combatLog = '${currentMonster.name} โกรธจัด พลังโจมตีเพิ่มขึ้น 1.5 เท่า ระวังให้ดี';
         logColor = const Color(0xFFDC2626);
       } else if (pushed) {
-        combatLog = '🕳️ $heroName ผลักมอนสเตอร์ตกเหว! โบนัสดาเมจ รวม $damage DMG!';
+        combatLog = '$heroName ผลักมอนสเตอร์ตกเหว โบนัสดาเมจ รวม $damage';
         logColor = const Color(0xFFDC2626);
       } else if (clash) {
-        combatLog = '⚔️ $heroName แตะไวกว่าในการปะทะ! ทำดาเมจ $damage DMG!';
+        combatLog = '$heroName แตะไวกว่าในการปะทะ ทำดาเมจ $damage';
         logColor = const Color(0xFF7C3AED);
       } else if (isUltimate) {
-        combatLog = '💥 ULTIMATE! คอมโบ x$comboStreak ทำดาเมจ $damage DMG และฟื้น HP!';
+        combatLog = 'ท่าไม้ตาย คอมโบ x$comboStreak ทำดาเมจ $damage และฟื้นเลือด';
         logColor = const Color(0xFF7C3AED);
       } else if (comboStreak >= 3) {
-        combatLog = '🔥 คอมโบ x$comboStreak! ตอบไวกว่า ${currentMonster.name} ทำดาเมจ $damage DMG!$stunNote';
+        combatLog = 'คอมโบ x$comboStreak ตอบไวกว่า ${currentMonster.name} ทำดาเมจ $damage $stunNote';
         logColor = const Color(0xFFEA580C);
       } else if (isCrit) {
-        combatLog = '⚡ CRITICAL! ตอบไวมาก $heroName ทำดาเมจ $damage DMG!$stunNote';
+        combatLog = 'คริติคอล ! ตอบไวมาก $heroName ทำดาเมจ $damage $stunNote';
         logColor = const Color(0xFFBE185D);
       } else {
-        combatLog = '⚔️ ตอบก่อน! $heroName โจมตี ${currentMonster.name} $damage DMG!$stunNote';
+        combatLog = 'ตอบก่อน $heroName โจมตี ${currentMonster.name} $damage ดาเมจ $stunNote';
         logColor = const Color(0xFFDB2777);
       }
     });
 
     if (healed > 0) _addFloatingText('+$healed', const Color(0xFF16A34A), onRight: false);
     if (currentMonster.currentHp > 0 && stolen) {
-      _setMonsterMood(MonsterMood.shocked, bubble: const ['ว้าย! โดนแย่งตอบ! 😱', 'เร็วจัง! 😲', 'อ๊ะ! ไม่ทันเลย! 😵'][math.Random().nextInt(3)]);
+      _setMonsterMood(MonsterMood.shocked, bubble: const ['ว้าย โดนแย่งตอบ', 'เร็วจัง', 'อ๊ะ ไม่ทันเลย'][math.Random().nextInt(3)]);
     }
     _checkBattleStatus();
   }
 
   // ---------- มอนสเตอร์ชนะรอบนี้ -> โจมตีผู้เรียนฟรี ----------
   void _monsterWinsRound({required String why, String? selected}) {
+    // A wrong answer already played its sound when it was tapped.
+    if (why != 'wrong') Sfx.wrong();
     _ticker?.cancel();
     _clashTimer?.cancel();
-    _playSound('wrong.mp3');
     _noteLearning(correct: false);
     _monsterLunge.forward(from: 0.0);
     _shakeController.forward(from: 0.0);
@@ -3664,7 +3491,7 @@ class _BattleScreenState extends State<BattleScreen>
       dmg = 0;
     }
     if (blocked) {
-      _addFloatingText('🛡️ BLOCK!', const Color(0xFFDB2777), onRight: false);
+      _addFloatingText('กันได้', const Color(0xFFDB2777), onRight: false);
     } else {
       _addFloatingText('-$dmg', const Color(0xFFDC2626), onRight: false);
     }
@@ -3676,30 +3503,29 @@ class _BattleScreenState extends State<BattleScreen>
       comboStreak = 0;
       heroCurrentHp = math.max(0, heroCurrentHp - dmg);
       if (blocked) {
-        combatLog = '🛡️ โล่ช่วยไว้! ไม่เสีย HP (คำตอบ: $ans)';
+        combatLog = 'โล่ช่วยไว้ ไม่เสียเลือด (คำตอบ : $ans)';
         logColor = const Color(0xFFDB2777);
       } else if (why == 'wrong') {
-        combatLog = '❌ ตอบผิด! ${currentMonster.name} ฉวยโอกาสโจมตี $dmg DMG! (คำตอบ: $ans)';
+        combatLog = 'ตอบผิด ${currentMonster.name} ฉวยโอกาสโจมตี $dmg ดาเมจ (คำตอบ : $ans)';
         logColor = const Color(0xFFDC2626);
       } else if (why == 'timeout') {
-        combatLog = '⏰ หมดเวลา! ${currentMonster.name} โจมตี $dmg DMG! (คำตอบ: $ans)';
+        combatLog = 'หมดเวลา ${currentMonster.name} โจมตี $dmg ดาเมจ (คำตอบ : $ans)';
         logColor = const Color(0xFFDC2626);
       } else if (why == 'clash') {
-        combatLog = '⚔️ ปะทะแพ้ไปนิดเดียว! ${currentMonster.name} โจมตี $dmg DMG! (คำตอบ: $ans)';
+        combatLog = 'ปะทะแพ้ไปนิดเดียว ${currentMonster.name} โจมตี $dmg ดาเมจ (คำตอบ : $ans)';
         logColor = const Color(0xFFDC2626);
       } else {
-        combatLog = '⚡ ${currentMonster.name} ตอบได้ก่อน! โจมตี $dmg DMG! (คำตอบ: $ans)';
+        combatLog = '${currentMonster.name} ตอบได้ก่อน โจมตี $dmg ดาเมจ (คำตอบ : $ans)';
         logColor = const Color(0xFFDC2626);
       }
     });
-    _setMonsterMood(MonsterMood.laugh, bubble: blocked ? 'อ๊ะ! มีโล่! 😮' : const ['ฮิฮิ ฉันไวกว่า! 😆', 'ช้าจัง~ 😝', 'เย้ ฉันชนะรอบนี้! 🎉'][_rnd.nextInt(3)]);
+    _setMonsterMood(MonsterMood.laugh, bubble: blocked ? 'อ๊ะ มีโล่' : const ['ฮิฮิ ฉันไวกว่า', 'ช้าจัง~', 'เย้ ฉันชนะรอบนี้'][_rnd.nextInt(3)]);
     _checkBattleStatus();
   }
 
   // ---------- CLASH: ตอบถูกพร้อมกัน -> แย่งแตะตัวอักษรแรกของคำ ----------
   void _startClash() {
     _ticker?.cancel();
-    _playSound('clash.mp3');
     HapticFeedback.heavyImpact();
     final String target = currentQuestion.word.trim().substring(0, 1).toUpperCase();
     const String abc = 'ABCDEFGHIJKLMNOPRSTW';
@@ -3716,7 +3542,7 @@ class _BattleScreenState extends State<BattleScreen>
       _clashLetters = list;
       _clashWrong.clear();
       _clashDurMs = (qte * 1000).round();
-      combatLog = '⚔️ CLASH! ตอบถูกพร้อมกัน! แย่งแตะให้ไวที่สุด!';
+      combatLog = 'ปะทะ ! ตอบถูกพร้อมกัน ! แย่งแตะให้ไวที่สุด !';
       logColor = const Color(0xFF7C3AED);
     });
     _clashTimer = Timer(Duration(milliseconds: _clashDurMs), () {
@@ -3745,7 +3571,7 @@ class _BattleScreenState extends State<BattleScreen>
       ..shuffle();
     setState(() {
       _hiddenChoices.addAll(wrongs.take(2));
-      combatLog = '💡 ตัดตัวเลือกที่ผิดออกแล้ว! ตอบให้ไวเลย';
+      combatLog = 'ตัดตัวเลือกที่ผิดออกแล้ว ตอบให้ไวเลย';
       logColor = const Color(0xFFCA8A04);
     });
   }
@@ -3755,7 +3581,7 @@ class _BattleScreenState extends State<BattleScreen>
     if (!monsterProgress.useItem('freeze')) return;
     setState(() {
       _freezeLeft = 3.0;
-      combatLog = '⏱️ Time Freeze! มอนสเตอร์หยุดคิด 3 วินาที ❄️';
+      combatLog = 'หยุดเวลา มอนสเตอร์หยุดคิด 3 วินาที';
       logColor = const Color(0xFFBE185D);
     });
   }
@@ -3766,10 +3592,10 @@ class _BattleScreenState extends State<BattleScreen>
     setState(() {
       _smokeUsed = true;
       _monsterTime = math.min(_monsterTime + 2.0, _limitSec - 0.3);
-      combatLog = '💨 Smoke Bomb! ${currentMonster.name} ลังเล ตอบช้าลง 2 วินาที';
+      combatLog = 'ระเบิดควัน ${currentMonster.name} ลังเล ตอบช้าลง 2 วินาที';
       logColor = const Color(0xFF64748B);
     });
-    _setMonsterMood(MonsterMood.thinking, bubble: 'แค่ก ๆ มองไม่เห็น! 💨');
+    _setMonsterMood(MonsterMood.thinking, bubble: 'แค่ก ๆ มองไม่เห็น');
   }
 
   void _useShield() {
@@ -3777,7 +3603,7 @@ class _BattleScreenState extends State<BattleScreen>
     if (!monsterProgress.useItem('shield')) return;
     setState(() {
       _shield = true;
-      combatLog = '🛡️ เปิดโล่แล้ว! ถ้าโดนแย่งตอบ โล่จะรับดาเมจให้ 1 ครั้ง';
+      combatLog = 'เปิดโล่แล้ว ถ้าโดนแย่งตอบ โล่จะรับดาเมจให้ 1 ครั้ง';
       logColor = const Color(0xFFDB2777);
     });
   }
@@ -3805,7 +3631,7 @@ class _BattleScreenState extends State<BattleScreen>
                 border: Border.all(color: active ? const Color(0xFFFFD54A) : _BT.woodDark, width: 2.5),
                 boxShadow: [
                   const BoxShadow(color: Color(0x55000000), blurRadius: 4, offset: Offset(0, 2)),
-                  if (active) BoxShadow(color: const Color(0xFFFFD54A).withOpacity(0.8), blurRadius: 10, spreadRadius: 1),
+                  if (active) BoxShadow(color: const Color(0xFFFFD54A).withValues(alpha: 0.8), blurRadius: 10, spreadRadius: 1),
                 ],
               ),
               child: Text(emoji, style: TextStyle(fontSize: size * 0.5)),
@@ -3836,13 +3662,11 @@ class _BattleScreenState extends State<BattleScreen>
     _ticker?.cancel();
     if (currentMonster.currentHp <= 0) {
       _stopSuddenMusic();
-      _playSound('victory.mp3');
       _nextRoundTimer = Timer(const Duration(milliseconds: 700), () {
         if (mounted) _onDefeatMonster();
       });
     } else if (heroCurrentHp <= 0) {
       _stopSuddenMusic();
-      _playSound('gameover.mp3');
       _nextRoundTimer = Timer(const Duration(milliseconds: 700), () {
         if (mounted) _showGameOverDialog();
       });
@@ -3866,26 +3690,12 @@ class _BattleScreenState extends State<BattleScreen>
 
     monsterProgress.recordKill(boss: _isBossWave);
     monsterProgress.noteCombo(maxCombo);
-    monsterProgress.addGold(currentMonster.goldReward);
-
-    heroExp += currentMonster.expReward;
-    heroGold += currentMonster.goldReward;
-
-    bool isLevelUp = false;
-    if (heroExp >= heroMaxExp) {
-      heroLevel++;
-      heroExp -= heroMaxExp;
-      heroMaxExp = (heroMaxExp * 1.5).round();
-      heroMaxHp += 20;
-      heroCurrentHp = heroMaxHp;
-      heroBaseAtk += 8;
-      isLevelUp = true;
-    }
 
     if (currentStage >= _totalWaves) {
-      _onLevelCleared(isLevelUp);
+      _onLevelCleared();
     } else {
-      _showWaveDialog(isLevelUp);
+      _saveResume();
+      _showWaveDialog();
     }
   }
 
@@ -3893,7 +3703,7 @@ class _BattleScreenState extends State<BattleScreen>
     final PowerUpInfo info = kPowerUps.firstWhere((p) => p.id == _lastDrop);
     return Chip(
       avatar: Text(info.emoji),
-      label: Text('ดรอป! ${info.name}', style: const TextStyle(color: Color(0xFF15803D), fontWeight: FontWeight.bold)),
+      label: Text('ดรอป ${info.name}', style: const TextStyle(color: Color(0xFF15803D), fontWeight: FontWeight.bold)),
       backgroundColor: const Color(0xFFDCFCE7),
       side: BorderSide.none,
     );
@@ -3905,62 +3715,126 @@ class _BattleScreenState extends State<BattleScreen>
       spacing: 8,
       runSpacing: 8,
       children: [
-        Chip(
-          avatar: const Text('✨'),
-          label: Text('+${currentMonster.expReward} EXP', style: const TextStyle(color: Color(0xFF9D174D), fontWeight: FontWeight.bold)),
-          backgroundColor: const Color(0xFFFCE7F3),
-          side: BorderSide.none,
-        ),
-        Chip(
-          avatar: const Text('💰'),
-          label: Text('+${currentMonster.goldReward} Gold', style: const TextStyle(color: Color(0xFF9D174D), fontWeight: FontWeight.bold)),
-          backgroundColor: const Color(0xFFFCE7F3),
-          side: BorderSide.none,
-        ),
         if (_lastDrop != null) _dropChip(),
-        if (maxCombo >= 3)
-          Chip(
-            avatar: const Text('🔥'),
-            label: Text('คอมโบสูงสุด x$maxCombo', style: const TextStyle(color: Color(0xFFC2410C), fontWeight: FontWeight.bold)),
-            backgroundColor: const Color(0xFFFFEDD5),
-            side: BorderSide.none,
-          ),
       ],
     );
   }
 
-  void _showWaveDialog(bool isLevelUp) {
-    showDialog<void>(
+  // dialog ที่ปุ่ม Back ของเครื่องปิดไม่ได้ (กันเกมค้าง/ตอบข้อเดิมซ้ำ)
+  Future<void> _showLockedDialog(WidgetBuilder builder) async {
+    _dialogs++;
+    try {
+      await showDialog<void>(
+        context: context,
+        barrierDismissible: false,
+        builder: (ctx) => PopScope(canPop: false, child: builder(ctx)),
+      );
+    } finally {
+      _dialogs--;
+    }
+  }
+
+  /// The hero is the child: shows the account's name (saved one first,
+  /// then the latest from the server).
+  Future<void> _loadHeroName() async {
+    final saved = await AccountName.cached();
+    if (saved != null && mounted) setState(() => heroName = saved);
+    final latest = await AccountName.refresh();
+    if (latest != null && latest.trim().isNotEmpty && mounted) {
+      setState(() => heroName = latest.trim());
+    }
+  }
+
+  // ---------- หยุดเกมชั่วคราว (สลับแอป / ถามก่อนออก) ----------
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _resumeBattle();
+    } else {
+      _pauseBattle();
+    }
+  }
+
+  /// Stops the clock: the monster doesn't answer while the child is away.
+  void _pauseBattle() {
+    if (_paused || _dialogs > 0) return;
+    _paused = true;
+    _cancelRoundTimers();
+    // No answering (or clash tapping) while stopped: the round is dropped
+    // and a new question comes when the game goes on.
+    if (mounted) setState(() => _phase = _Phase.resolved);
+  }
+
+  /// Goes on with a new question (or the win / lose that was coming).
+  void _resumeBattle() {
+    if (!_paused || _askingLeave) return; // wait for the answer to "ออกจากด่าน ?"
+    _paused = false;
+    if (mounted) _checkBattleStatus();
+  }
+
+  Future<void> _confirmLeave() async {
+    if (_dialogs > 0 || _askingLeave) return;
+    _pauseBattle();
+    _askingLeave = true;
+    final bool? leave = await showDialog<bool>(
       context: context,
-      barrierDismissible: false,
       builder: (ctx) => AlertDialog(
         backgroundColor: Colors.white,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+        title: const Text('ออกจากด่าน ?', textAlign: TextAlign.center, style: TextStyle(fontWeight: FontWeight.w900, color: Color(0xFFDB2777))),
+        content: const Text(
+          'การต่อสู้ในด่านนี้จะหายไป\nแต่เหรียญและไอเทมที่ได้แล้วยังอยู่ครบ',
+          textAlign: TextAlign.center,
+        ),
+        actionsAlignment: MainAxisAlignment.center,
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('เล่นต่อ')),
+          _GameButton(
+            color: const Color(0xFFEF4444),
+            shadow: const Color(0xFF991B1B),
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('ออก'),
+          ),
+        ],
+      ),
+    );
+    _askingLeave = false;
+    if (!mounted) return;
+    if (leave == true) {
+      _paused = false;
+      Navigator.pop(context);
+    } else {
+      _resumeBattle();
+    }
+  }
+
+  void _showWaveDialog() {
+    _showLockedDialog(
+      (ctx) => AlertDialog(
+        backgroundColor: Colors.white,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
         title: Text(
-          isLevelUp ? '🎉 LEVEL UP! (Lv.$heroLevel)' : '🏆 ชนะแล้ว!',
+          'ชนะแล้ว',
           textAlign: TextAlign.center,
           style: const TextStyle(color: Color(0xFFDB2777), fontWeight: FontWeight.bold, fontSize: 24),
         ),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Text('ล้ม ${currentMonster.name} สำเร็จ!', textAlign: TextAlign.center, style: const TextStyle(color: Color(0xFF1E293B))),
+            Text('ล้ม ${currentMonster.name} สำเร็จแล้ว', textAlign: TextAlign.center, style: const TextStyle(color: Color(0xFF1E293B))),
             const SizedBox(height: 12),
             _rewardChips(),
-            if (isLevelUp) ...[
-              const Divider(height: 24, color: Color(0xFFE2E8F0)),
-              const Text('✨ พลังเพิ่มขึ้น!', style: TextStyle(color: Color(0xFFDB2777), fontWeight: FontWeight.bold)),
-              const Text('Max HP +20  |  ATK +8', style: TextStyle(color: Color(0xFF64748B))),
-            ],
             const SizedBox(height: 10),
-            const Text('พักฟื้น HP +20 ก่อนเลเวลถัดไป', style: TextStyle(fontSize: 12, color: Color(0xFF16A34A), fontWeight: FontWeight.bold)),
+            const Text('พักฟื้นเลือด +20 ก่อนเลเวลถัดไป', style: TextStyle(fontSize: 12, color: Color(0xFF16A34A), fontWeight: FontWeight.bold)),
           ],
         ),
         actionsPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
         actions: [
           SizedBox(
             width: double.infinity,
-            child: ElevatedButton.icon(
+            child: ElevatedButton(
               style: ElevatedButton.styleFrom(
                 backgroundColor: const Color(0xFFDB2777),
                 foregroundColor: Colors.white,
@@ -3974,11 +3848,10 @@ class _BattleScreenState extends State<BattleScreen>
                 _spawnMonster();
                 _startRound();
               },
-              icon: const Icon(Icons.arrow_forward),
-              label: Text(
+              child: Text(
                 currentStage + 1 == _totalWaves && isBossLevel(widget.level)
-                    ? 'ไปสู้กับบอส 👑'
-                    : 'เลเวลถัดไป (${currentStage + 1}/$_totalWaves)',
+                    ? 'ไปสู้กับบอส'
+                    : 'เลเวลถัดไป (${currentStage + 1} / $_totalWaves)',
                 style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
               ),
             ),
@@ -3995,18 +3868,18 @@ class _BattleScreenState extends State<BattleScreen>
     return 1;
   }
 
-  void _onLevelCleared(bool isLevelUp) {
+  void _onLevelCleared() {
+    Sfx.complete();
+    _clearResume();
     final int stars = _calcStars();
-    final int bonus = 20 + stars * 10 + (isBossLevel(widget.level) ? 50 : 0);
     monsterProgress.completeLevel(widget.level, stars);
-    monsterProgress.addGold(bonus);
-    heroGold += bonus;
+    // Real coins for passing: 5 per star (+10 boss), once per level per day.
+    _coinFutures.add(MonsterCoins.levelClear(widget.level, stars));
+    final Future<List<GuessCoinResult>> levelCoins = Future.wait(_coinFutures);
     final bool hasNext = widget.level < kMonsterLevels;
 
-    showDialog<void>(
-      context: context,
-      barrierDismissible: false,
-      builder: (ctx) => Dialog(
+    _showLockedDialog(
+      (ctx) => Dialog(
         backgroundColor: Colors.white,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(28)),
         child: Padding(
@@ -4016,18 +3889,16 @@ class _BattleScreenState extends State<BattleScreen>
               clipBehavior: Clip.none,
               alignment: Alignment.topCenter,
               children: [
-                const Positioned(top: -20, child: ConfettiBurst()),
                 Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     Text(
-                      isBossLevel(widget.level) ? '👑 ล้มบอสสำเร็จ!' : '🎉 ผ่านด่าน ${widget.level}!',
+                      isBossLevel(widget.level) ? 'ล้มบอสสำเร็จ' : 'ผ่านด่าน ${widget.level} ',
                       textAlign: TextAlign.center,
                       style: const TextStyle(color: Color(0xFFDB2777), fontWeight: FontWeight.w900, fontSize: 24),
                     ),
-                    if (isLevelUp) Text('LEVEL UP! Lv.$heroLevel', style: const TextStyle(color: Color(0xFFEA580C), fontWeight: FontWeight.bold)),
                     const SizedBox(height: 12),
-                    Text('HP เหลือ $heroCurrentHp/$heroMaxHp', style: const TextStyle(color: Color(0xFF64748B), fontSize: 12)),
+                    Text('เลือดเหลือ $heroCurrentHp / $heroMaxHp', style: const TextStyle(color: Color(0xFF64748B), fontSize: 12)),
                     const SizedBox(height: 8),
                     Wrap(
                       alignment: WrapAlignment.center,
@@ -4035,33 +3906,40 @@ class _BattleScreenState extends State<BattleScreen>
                       runSpacing: 8,
                       children: [
                         if (_lastDrop != null) _dropChip(),
+                        FutureBuilder<List<GuessCoinResult>>(
+                          future: levelCoins,
+                          builder: (_, snap) {
+                            final list = snap.data;
+                            final coins = _coinsBefore + (list?.fold<int>(0, (s, r) => s + r.coins) ?? 0);
+                            final pending = list?.where((r) => r.pending).length ?? 0;
+                            final String text = list == null
+                                ? 'กำลังนับเหรียญ...'
+                                : pending > 0
+                                    ? '+$coins เหรียญ (รอต่อเน็ต)'
+                                    : coins > 0
+                                        ? '+$coins เหรียญ'
+                                        : 'วันนี้ได้เหรียญด่านนี้ไปแล้ว';
+                            return Chip(
+                              avatar: const Icon(Icons.monetization_on_rounded, color: Color(0xFFFFB627), size: 20),
+                              label: Text(text, style: const TextStyle(color: Color(0xFFB45309), fontWeight: FontWeight.bold)),
+                              backgroundColor: const Color(0xFFFFF7D6),
+                              side: BorderSide.none,
+                            );
+                          },
+                        ),
                         Chip(
-                          avatar: const Text('💰'),
-                          label: Text('+$heroGold Gold', style: const TextStyle(color: Color(0xFF9D174D), fontWeight: FontWeight.bold)),
-                          backgroundColor: const Color(0xFFFCE7F3),
+                          avatar: const Icon(Icons.check_circle_rounded, color: Color(0xFF16A34A), size: 20),
+                          label: Text('ตอบถูก $_correctCount คำ', style: const TextStyle(color: Color(0xFF15803D), fontWeight: FontWeight.bold)),
+                          backgroundColor: const Color(0xFFDCFCE7),
                           side: BorderSide.none,
                         ),
-                        if (maxCombo >= 3)
-                          Chip(
-                            avatar: const Text('🔥'),
-                            label: Text('คอมโบ x$maxCombo', style: const TextStyle(color: Color(0xFFC2410C), fontWeight: FontWeight.bold)),
-                            backgroundColor: const Color(0xFFFFEDD5),
-                            side: BorderSide.none,
-                          ),
                       ],
-                    ),
-                    const SizedBox(height: 8),
-                    Chip(
-                      avatar: const Text('📚'),
-                      label: Text('ตอบถูก $_correctCount คำ', style: const TextStyle(color: Color(0xFF15803D), fontWeight: FontWeight.bold)),
-                      backgroundColor: const Color(0xFFDCFCE7),
-                      side: BorderSide.none,
                     ),
                     _missedWordsPanel(),
                     if (widget.level == kMonsterLevels)
                       const Padding(
                         padding: EdgeInsets.only(top: 10),
-                        child: Text('คุณผ่านครบทุกด่านแล้ว! 🏆', style: TextStyle(color: Color(0xFF7C3AED), fontWeight: FontWeight.w900)),
+                        child: Text('คุณผ่านครบทุกด่านแล้ว', style: TextStyle(color: Color(0xFF7C3AED), fontWeight: FontWeight.w900)),
                       ),
                     const SizedBox(height: 16),
                     if (hasNext)
@@ -4077,7 +3955,7 @@ class _BattleScreenState extends State<BattleScreen>
                               MaterialPageRoute(builder: (_) => BattleScreen(level: widget.level + 1)),
                             );
                           },
-                          child: const Text('ด่านถัดไป ➔'),
+                          child: const Text('ด่านถัดไป'),
                         ),
                       ),
                     if (hasNext) const SizedBox(height: 10),
@@ -4122,13 +4000,13 @@ class _BattleScreenState extends State<BattleScreen>
 
   void _restartLevel() {
     _resetDuelState();
-    heroMaxHp = 100 + (widget.level - 1) * 6;
+    _clearResume();
+    _coinsBefore = 0;
+    _coinsNow = 0;
+    heroMaxHp = heroMaxHpOf(widget.level);
+    _coinFutures.clear();
     heroCurrentHp = heroMaxHp;
     heroBaseAtk = 25 + (widget.level - 1) * 2;
-    heroLevel = 1;
-    heroExp = 0;
-    heroMaxExp = 50;
-    heroGold = 0;
     currentStage = 1;
     comboStreak = 0;
     maxCombo = 0;
@@ -4140,27 +4018,26 @@ class _BattleScreenState extends State<BattleScreen>
   }
 
   void _showGameOverDialog() {
+    _clearResume();
     monsterProgress.noteCombo(maxCombo);
-    showDialog<void>(
-      context: context,
-      barrierDismissible: false,
-      builder: (ctx) => AlertDialog(
+    _showLockedDialog(
+      (ctx) => AlertDialog(
         backgroundColor: Colors.white,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
         scrollable: true,
         title: const Center(
-          child: Text('💀 GAME OVER', style: TextStyle(color: Color(0xFFDB2777), fontWeight: FontWeight.bold, fontSize: 26)),
+          child: Text('จบเกม', style: TextStyle(color: Color(0xFFDB2777), fontWeight: FontWeight.bold, fontSize: 26)),
         ),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
             Text('$heroName พ่ายแพ้ในการประลอง...', style: const TextStyle(color: Color(0xFF1E293B))),
             const SizedBox(height: 8),
-            Text('ไปได้ไกลสุดถึง เลเวล $currentStage/$_totalWaves', style: const TextStyle(color: Color(0xFFDB2777), fontWeight: FontWeight.bold)),
+            Text('ไปได้ไกลสุดถึง เลเวล $currentStage / $_totalWaves', style: const TextStyle(color: Color(0xFFDB2777), fontWeight: FontWeight.bold)),
             const SizedBox(height: 8),
             _missedWordsPanel(),
             const SizedBox(height: 8),
-            const Text('💡 ลองซื้อไอเทมช่วยเล่นก่อนเข้าด่านดูนะ', style: TextStyle(fontSize: 12, color: Color(0xFF64748B))),
+            const Text('ลองซื้อไอเทมช่วยเล่นก่อนเข้าด่านดูนะ', style: TextStyle(fontSize: 12, color: Color(0xFF64748B))),
           ],
         ),
         actions: [
@@ -4208,11 +4085,17 @@ class _BattleScreenState extends State<BattleScreen>
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop) _confirmLeave();
+      },
+      child: Scaffold(
       backgroundColor: const Color(0xFFFFE0EC),
       body: _GameScaffoldBody(
         title: 'สร้างมอนสเตอร์',
         color: const Color(0xFFE9478F),
+        onBack: _confirmLeave,
         child: Container(
         decoration: const BoxDecoration(
           gradient: LinearGradient(
@@ -4226,14 +4109,17 @@ class _BattleScreenState extends State<BattleScreen>
         fit: StackFit.expand,
         children: [
           SafeArea(
-            child: Column(
+            child: LayoutBuilder(
+              builder: (context, box) {
+                _fitPanel(box.maxWidth, box.maxHeight);
+                return Column(
               children: [
                 _buildPlayerHeader(),
                 Expanded(
                   child: AnimatedBuilder(
                     animation: _shakeController,
                     builder: (context, child) {
-                      double offset = math.sin(_shakeController.value * math.pi * 4) * 12;
+                      const double offset = 0.0;
                       return Transform.translate(
                         offset: Offset(offset, 0),
                         child: child,
@@ -4245,6 +4131,8 @@ class _BattleScreenState extends State<BattleScreen>
                 _buildCombatLog(),
                 _buildQuestionPanel(),
               ],
+            );
+              },
             ),
           ),
           if (_phase == _Phase.clash) _clashOverlay(),
@@ -4252,7 +4140,7 @@ class _BattleScreenState extends State<BattleScreen>
       ),
         ),
       ),
-    );
+    ));
   }
 
   // ---------- หน้าจอปะทะ (CLASH!) ----------
@@ -4265,17 +4153,17 @@ class _BattleScreenState extends State<BattleScreen>
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Text('⚔️ CLASH! ⚔️',
+            const Text('ปะทะ !',
                 style: TextStyle(fontSize: 38, fontWeight: FontWeight.w900, color: Color(0xFFFDE047))),
             const SizedBox(height: 6),
-            Text('ตอบถูกพร้อมกันเลย! แย่งแตะให้ไวกว่า ${currentMonster.name}',
+            Text('ตอบถูกพร้อมกันเลย แย่งแตะให้ไวกว่า ${currentMonster.name}',
                 textAlign: TextAlign.center,
                 style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Colors.white)),
             const SizedBox(height: 16),
             Text('${_emojiFor(currentQuestion)} ${currentQuestion.word}',
                 style: const TextStyle(fontSize: 32, fontWeight: FontWeight.w900, color: Colors.white)),
             const SizedBox(height: 4),
-            const Text('คำนี้ขึ้นต้นด้วยตัวอะไร?',
+            const Text('คำนี้ขึ้นต้นด้วยตัวอะไร ?',
                 style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Color(0xFFC7D2FE))),
             const SizedBox(height: 16),
             Row(
@@ -4314,7 +4202,7 @@ class _BattleScreenState extends State<BattleScreen>
               ),
             ),
             const SizedBox(height: 6),
-            const Text('👾 มอนสเตอร์กำลังแตะ... รีบเลย!',
+            const Text('มอนสเตอร์กำลังแตะ... รีบเลย',
                 style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.white70)),
           ],
         ),
@@ -4323,7 +4211,6 @@ class _BattleScreenState extends State<BattleScreen>
   }
 
   Widget _buildPlayerHeader() {
-    final double expV = heroMaxExp <= 0 ? 0.0 : (heroExp / heroMaxExp).clamp(0.0, 1.0).toDouble();
     return AnimatedBuilder(
       animation: monsterProgress,
       builder: (context, _) => Container(
@@ -4350,103 +4237,18 @@ class _BattleScreenState extends State<BattleScreen>
               child: const Text('🗡️', style: TextStyle(fontSize: 28)),
             ),
             const SizedBox(width: 12),
-            // ชื่อ + EXP
+            // ชื่อฮีโร่
             Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    '$heroName (Lv.$heroLevel)',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(fontSize: 19, fontWeight: FontWeight.w900, color: _BT.ink),
-                  ),
-                  const SizedBox(height: 4),
-                  Container(
-                    height: 16,
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF4A4452),
-                      borderRadius: BorderRadius.circular(8),
-                      border: Border.all(color: const Color(0xFF8E849A), width: 1.5),
-                    ),
-                    child: ClipRRect(
-                      borderRadius: BorderRadius.circular(6),
-                      child: Stack(
-                        alignment: Alignment.center,
-                        children: [
-                          Align(
-                            alignment: Alignment.centerLeft,
-                            child: FractionallySizedBox(
-                              widthFactor: expV,
-                              child: Container(
-                                decoration: const BoxDecoration(
-                                  gradient: LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter, colors: [Color(0xFFFFD65A), Color(0xFFF2A900)]),
-                                ),
-                              ),
-                            ),
-                          ),
-                          Text('$heroExp/$heroMaxExp', style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w800, color: Colors.white)),
-                        ],
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 3),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      const Text('EXP:', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800, color: _BT.ink)),
-                      Text('$heroExp/$heroMaxExp', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w800, color: _BT.ink)),
-                    ],
-                  ),
-                ],
+              child: Text(
+                heroName,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w900, color: _BT.ink),
               ),
             ),
             const SizedBox(width: 12),
-            // เหรียญ + ถุงเงิน
-            Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: [
-                Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Container(
-                      width: 34,
-                      height: 34,
-                      alignment: Alignment.center,
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        gradient: const RadialGradient(colors: [Color(0xFFFFE27A), Color(0xFFF2A900)]),
-                        border: Border.all(color: const Color(0xFFB8741A), width: 2.5),
-                      ),
-                      child: const Text('\$', style: TextStyle(fontSize: 19, fontWeight: FontWeight.w900, color: Color(0xFF9A5B0B))),
-                    ),
-                    const SizedBox(width: 6),
-                    Text('${monsterProgress.gold}', style: const TextStyle(fontSize: 26, fontWeight: FontWeight.w900, color: _BT.ink)),
-                  ],
-                ),
-                const SizedBox(height: 2),
-                Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const Text('💰', style: TextStyle(fontSize: 16)),
-                    const SizedBox(width: 4),
-                    Text('$heroGold', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w900, color: _BT.ink)),
-                  ],
-                ),
-                const SizedBox(height: 4),
-                Container(
-                  width: 84,
-                  height: 7,
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF8A6A98),
-                    borderRadius: BorderRadius.circular(4),
-                    border: Border.all(color: const Color(0xFFB89BC8), width: 1),
-                  ),
-                ),
-              ],
-            ),
+            // เหรียญ (แบบเดียวกับหน้าเลือกด่าน)
+            const _CoinPill(fontSize: 18),
           ],
         ),
       ),
@@ -4455,8 +4257,6 @@ class _BattleScreenState extends State<BattleScreen>
 
   // ---------- บันทึกการเรียนรู้ ----------
   void _noteLearning({required bool correct}) {
-    _lastCorrect = correct;
-    _learnNote = '${_emojiFor(currentQuestion)} ${currentQuestion.word} = ${currentQuestion.correctMeaning}';
     if (correct) {
       _correctCount++;
     } else {
@@ -4475,7 +4275,7 @@ class _BattleScreenState extends State<BattleScreen>
       child: Column(
         children: [
           const Text(
-            '📝 คำที่ควรทบทวน (แตะเพื่อฟังเสียง)',
+            'คำที่ควรทบทวน (แตะเพื่อฟังเสียง)',
             style: TextStyle(fontSize: 12, fontWeight: FontWeight.w900, color: Color(0xFF7C3AED)),
           ),
           const SizedBox(height: 6),
@@ -4485,7 +4285,7 @@ class _BattleScreenState extends State<BattleScreen>
             runSpacing: 6,
             children: items.map((m) {
               return GestureDetector(
-                onTap: () => _speakWord(m['word']!),
+                onTap: () => _speakWord(m['word'] !),
                 child: Container(
                   padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
                   decoration: BoxDecoration(
@@ -4493,7 +4293,7 @@ class _BattleScreenState extends State<BattleScreen>
                     borderRadius: BorderRadius.circular(12),
                   ),
                   child: Text(
-                    '🔊 ${m['word']} = ${m['meaning']}',
+                    '${m['word']} = ${m['meaning']}',
                     style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Color(0xFF5B21B6)),
                   ),
                 ),
@@ -4506,16 +4306,19 @@ class _BattleScreenState extends State<BattleScreen>
   }
 
   // ---------- สนามต่อสู้ ----------
-  Widget _buildBattleArena() {
-    final WorldTheme w = _world;
-    const List<Alignment> decoPos = [
-      Alignment(-0.94, -0.2),
-      Alignment(0.94, -0.35),
-      Alignment(-0.94, 0.78),
-      Alignment(0.94, 0.8),
-    ];
-    const List<double> decoSize = [40, 34, 54, 56];
+  /// Shares the free height: part of it makes the word card and the answer
+  /// buttons bigger, the rest goes to the arena, so nothing looks empty.
+  void _fitPanel(double width, double height) {
+    final double m = ((width - 83) / 1.85).clamp(56.0, 230.0).toDouble();
+    final double arenaNeeds = m + 180; // characters, names, HP bars
+    const double others = 64 + 56 + 200; // header, battle log, answer area
+    final double spare = height - arenaNeeds - others;
+    // All the spare height goes to the word card and the answer buttons
+    // (up to 1.6x); the arena keeps just what the characters need.
+    _ui = (1 + spare / 130).clamp(1.0, 1.6).toDouble();
+  }
 
+  Widget _buildBattleArena() {
     return Container(
       width: double.infinity,
       margin: const EdgeInsets.fromLTRB(12, 8, 12, 4),
@@ -4531,50 +4334,18 @@ class _BattleScreenState extends State<BattleScreen>
       ),
       child: Container(
         decoration: BoxDecoration(
-          gradient: LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter, colors: w.colors),
+          color: const Color(0xFF0F3D2E), // ฉากป่าวาดด้วย _BattlefieldPainter
           borderRadius: BorderRadius.circular(17),
-          border: Border.all(color: _BT.woodDark.withOpacity(0.6), width: 1.5),
+          border: Border.all(color: _BT.woodDark.withValues(alpha: 0.6), width: 1.5),
         ),
         child: ClipRRect(
           borderRadius: BorderRadius.circular(16),
           child: Stack(
             children: [
-              // พื้นสนาม
-              Positioned(
-                left: 0,
-                right: 0,
-                bottom: 0,
-                height: 78,
-                child: DecoratedBox(
-                  decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      begin: Alignment.topCenter,
-                      end: Alignment.bottomCenter,
-                      colors: [w.accent.withOpacity(0.12), w.accent.withOpacity(0.45)],
-                    ),
-                  ),
-                ),
-              ),
-              // ของตกแต่งประจำโลก (ลอยขึ้นลงเบาๆ)
               Positioned.fill(
                 child: IgnorePointer(
-                  child: AnimatedBuilder(
-                    animation: _idleController,
-                    builder: (context, _) => Stack(
-                      children: [
-                        for (int i = 0; i < 4 && i < w.deco.length; i++)
-                          Align(
-                            alignment: decoPos[i],
-                            child: Transform.translate(
-                              offset: Offset(0, math.sin(_idleController.value * math.pi + i) * 3),
-                              child: Opacity(
-                                opacity: 0.9,
-                                child: Text(w.deco[i], style: TextStyle(fontSize: decoSize[i])),
-                              ),
-                            ),
-                          ),
-                      ],
-                    ),
+                  child: CustomPaint(
+                    painter: _BattlefieldPainter(accent: _world.accent, boss: _isBossWave),
                   ),
                 ),
               ),
@@ -4595,7 +4366,7 @@ class _BattleScreenState extends State<BattleScreen>
                         boxShadow: const [BoxShadow(color: Color(0x44000000), offset: Offset(0, 2), blurRadius: 3)],
                       ),
                       child: Text(
-                        '${_isBossWave ? '👑 BOSS' : _world.emoji} LV.${widget.level} • WAVE $currentStage/$_totalWaves',
+                        '${_isBossWave ? 'บอส ' : ''}ด่าน ${widget.level} • เลเวล $currentStage / $_totalWaves',
                         style: TextStyle(
                           color: _isBossWave ? const Color(0xFFB91C1C) : _BT.ink,
                           fontWeight: FontWeight.w900,
@@ -4622,7 +4393,7 @@ class _BattleScreenState extends State<BattleScreen>
               ),
               // แถบดึงเชือก (Tug-of-War)
               Positioned(
-                top: 38,
+                top: 46,
                 left: 14,
                 right: 14,
                 child: _tugBar(),
@@ -4632,14 +4403,14 @@ class _BattleScreenState extends State<BattleScreen>
                 child: LayoutBuilder(
                   builder: (context, cons) {
                     final double availW = cons.maxWidth - 16;
-                    final double availH = cons.maxHeight - 66 - 4;
-                    final double byH = availH - 56; // หักพื้นที่แถบคิด/ชื่อ/หลอดเลือด (ซ้อนทับตัวละคร)
+                    final double availH = cons.maxHeight - 74 - 4;
+                    final double byH = availH - 70; // หักพื้นที่แถบคิด/ชื่อ/หลอดเลือด
                     final double byW = (availW - 30) / 1.85;
                     final double m = math.min(byH, byW).clamp(56.0, 230.0).toDouble();
                     final double monsterSize = _isBossWave ? m : m * 0.95;
                     final double heroSize = m * 0.9;
                     return Padding(
-                      padding: const EdgeInsets.fromLTRB(8, 64, 8, 4),
+                      padding: const EdgeInsets.fromLTRB(8, 72, 8, 4),
                       child: Center(
                         child: FittedBox(
                           fit: BoxFit.scaleDown,
@@ -4658,7 +4429,7 @@ class _BattleScreenState extends State<BattleScreen>
                               Padding(
                                 padding: EdgeInsets.only(bottom: m * 0.55),
                                 child: const Text(
-                                  'Vs.',
+                                  'ปะทะ',
                                   style: TextStyle(
                                     fontSize: 34,
                                     fontWeight: FontWeight.w900,
@@ -4729,8 +4500,8 @@ class _BattleScreenState extends State<BattleScreen>
           end: Alignment.bottomRight,
         ),
         boxShadow: [
-          BoxShadow(color: const Color(0xFF3B2410).withOpacity(0.45), blurRadius: 10, offset: const Offset(0, 4)),
-          if (comboStreak >= 3) BoxShadow(color: const Color(0xFFF59E0B).withOpacity(0.9), blurRadius: 24, spreadRadius: 4),
+          BoxShadow(color: const Color(0xFF3B2410).withValues(alpha: 0.45), blurRadius: 10, offset: const Offset(0, 4)),
+          if (comboStreak >= 3) BoxShadow(color: const Color(0xFFF59E0B).withValues(alpha: 0.9), blurRadius: 24, spreadRadius: 4),
         ],
       ),
       child: ClipOval(
@@ -4801,7 +4572,7 @@ class _BattleScreenState extends State<BattleScreen>
                     ),
                   ),
                   Text(
-                    '$currentHp/$maxHp',
+                    '$currentHp / $maxHp',
                     style: const TextStyle(
                       fontSize: 10,
                       fontWeight: FontWeight.w900,
@@ -4831,7 +4602,6 @@ class _BattleScreenState extends State<BattleScreen>
       ),
       child: Row(
         children: [
-          const Text('😊', style: TextStyle(fontSize: 16)),
           const SizedBox(width: 6),
           Expanded(
             child: LayoutBuilder(
@@ -4866,7 +4636,7 @@ class _BattleScreenState extends State<BattleScreen>
                       top: 0,
                       bottom: 0,
                       width: 22,
-                      child: const Center(child: Text('🚩', style: TextStyle(fontSize: 18))),
+                      child: const Center(child: Text('', style: TextStyle(fontSize: 18))),
                     ),
                   ],
                 );
@@ -4874,14 +4644,14 @@ class _BattleScreenState extends State<BattleScreen>
             ),
           ),
           const SizedBox(width: 6),
-          const Text('🌟', style: TextStyle(fontSize: 16)),
+          const Text('', style: TextStyle(fontSize: 16)),
         ],
       ),
     );
   }
 
   Widget _monsterThinkBar() {
-    final MonsterAIProfile p = kMonsterAI[currentMonster.ai]!;
+    final MonsterAIProfile p = kMonsterAI[currentMonster.ai] !;
     return AnimatedBuilder(
       animation: _tickN,
       builder: (context, _) {
@@ -4890,17 +4660,17 @@ class _BattleScreenState extends State<BattleScreen>
         final double remain = math.max(0.0, _monsterTime - _mClock);
         String label;
         if (_bubble != null) {
-          label = _bubble!;
+          label = _bubble !;
         } else if (_phase == _Phase.resolved || _phase == _Phase.ready) {
           label = p.label;
         } else if (_monsterStunned) {
-          label = '😵 ตอบผิด!';
+          label = 'ตอบผิด !';
         } else if (frozen) {
-          label = '❄️ แช่แข็ง ${_freezeLeft.toStringAsFixed(1)}';
+          label = 'แช่แข็ง ${_freezeLeft.toStringAsFixed(1)}';
         } else if (_phase == _Phase.grace) {
-          label = '❗ กำลังตอบ!';
+          label = 'กำลังตอบ !';
         } else {
-          label = '❓ คิดอยู่... ${remain.toStringAsFixed(1)} วิ';
+          label = 'คิดอยู่... ${remain.toStringAsFixed(1)} วิ';
         }
         final Color barColor = frozen
             ? const Color(0xFF38BDF8)
@@ -4927,7 +4697,7 @@ class _BattleScreenState extends State<BattleScreen>
               Container(
                 height: 10,
                 decoration: BoxDecoration(
-                  color: _BT.woodDark.withOpacity(0.55),
+                  color: _BT.woodDark.withValues(alpha: 0.55),
                   borderRadius: BorderRadius.circular(6),
                   border: Border.all(color: _BT.woodDark, width: 1.5),
                 ),
@@ -4960,13 +4730,11 @@ class _BattleScreenState extends State<BattleScreen>
     return AnimatedBuilder(
       animation: Listenable.merge([_idleController, _hitController, _heroLunge, _monsterLunge]),
       builder: (context, _) {
-        final double t = _idleController.value;
-        final double bob = math.sin(t * math.pi + (isHero ? 0.0 : math.pi)).abs() * 4;
-        final double shake = isHero ? 0.0 : math.sin(_hitController.value * math.pi * 6) * 14 * (1 - _hitController.value);
-        final double lunge = isHero
-            ? math.sin(_heroLunge.value * math.pi) * 60
-            : -math.sin(_monsterLunge.value * math.pi) * 60;
-        final double blink = t > 0.93 ? ((t - 0.93) / 0.07).clamp(0.0, 1.0) : 0.0;
+        // ตัวละครอยู่นิ่ง ไม่ลอย ไม่สั่น ไม่พุ่ง ไม่กะพริบตา
+        const double bob = 0.0;
+        const double shake = 0.0;
+        const double lunge = 0.0;
+        const double blink = 0.0;
 
         MonsterMood mood;
         if (_hitController.isAnimating || currentHp <= 0) {
@@ -4984,12 +4752,10 @@ class _BattleScreenState extends State<BattleScreen>
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              if (!isHero)
-                Align(
-                  alignment: Alignment.topCenter,
-                  heightFactor: 0.72,
-                  child: _monsterThinkBar(),
-                ),
+              if (!isHero) ...[
+                _monsterThinkBar(),
+                const SizedBox(height: 10),
+              ],
               if (isHero)
                 Stack(
                   clipBehavior: Clip.none,
@@ -5083,7 +4849,7 @@ class _BattleScreenState extends State<BattleScreen>
   Widget _buildCombatLog() {
     return Container(
       width: double.infinity,
-      margin: const EdgeInsets.fromLTRB(8, 2, 8, 3),
+      margin: EdgeInsets.symmetric(horizontal: 8, vertical: _gap),
       child: Stack(
         alignment: Alignment.center,
         children: [
@@ -5129,7 +4895,7 @@ class _BattleScreenState extends State<BattleScreen>
         return Container(
           height: 10,
           decoration: BoxDecoration(
-            color: const Color(0xFF4A3558).withOpacity(0.55),
+            color: const Color(0xFF4A3558).withValues(alpha: 0.55),
             borderRadius: BorderRadius.circular(8),
             border: Border.all(color: const Color(0xFF7D5A8C), width: 1.5),
           ),
@@ -5164,11 +4930,11 @@ class _BattleScreenState extends State<BattleScreen>
         margin: const EdgeInsets.only(top: 6),
         padding: const EdgeInsets.symmetric(vertical: 3),
         decoration: BoxDecoration(
-          color: const Color(0xFFEF4444).withOpacity(0.12 + 0.18 * _idleController.value),
+          color: const Color(0xFFEF4444).withValues(alpha: 0.12 + 0.18 * _idleController.value),
           borderRadius: BorderRadius.circular(12),
         ),
         child: Text(
-          '🔥 SUDDEN DEATH! เหลือแค่ ${_limitSec.round()} วินาที 🔥',
+          'ช่วงตัดสิน ! เหลือแค่ ${_limitSec.round()} วินาที ',
           textAlign: TextAlign.center,
           style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w900, color: Color(0xFFDC2626)),
         ),
@@ -5197,8 +4963,8 @@ class _BattleScreenState extends State<BattleScreen>
           children: [
             // กรอบรูป (ใช้อีโมจิแทนรูปภาพ)
             Container(
-              width: 84,
-              height: 44,
+              width: 84 * _ui,
+              height: 44 * _ui,
               alignment: Alignment.center,
               decoration: BoxDecoration(
                 gradient: const LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter, colors: [Color(0xFF9AD8F5), Color(0xFFB8E6A0)]),
@@ -5211,7 +4977,7 @@ class _BattleScreenState extends State<BattleScreen>
                 duration: const Duration(milliseconds: 550),
                 curve: Curves.elasticOut,
                 builder: (context, v, child) => Transform.scale(scale: v, child: child),
-                child: Text(emoji, style: const TextStyle(fontSize: 28)),
+                child: Text(emoji, style: TextStyle(fontSize: 28 * _ui)),
               ),
             ),
             const SizedBox(width: 12),
@@ -5221,8 +4987,8 @@ class _BattleScreenState extends State<BattleScreen>
                 alignment: Alignment.centerLeft,
                 child: Text(
                   currentQuestion.word,
-                  style: const TextStyle(
-                    fontSize: 30,
+                  style: TextStyle(
+                    fontSize: 30 * _ui,
                     fontWeight: FontWeight.w900,
                     color: _BT.ink,
                     letterSpacing: 0.5,
@@ -5248,53 +5014,10 @@ class _BattleScreenState extends State<BattleScreen>
     );
   }
 
-  Widget _learnNoteBar() {
-    final bool show = _answerLocked && _learnNote != null;
-    final bool ok = _lastCorrect == true;
-    return SizedBox(
-      height: 20,
-      child: AnimatedSwitcher(
-        duration: const Duration(milliseconds: 200),
-        child: show
-            ? Container(
-                key: ValueKey<String>('note$_questionSeq'),
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 3),
-                decoration: BoxDecoration(
-                  color: ok ? const Color(0xFFDCFCE7) : const Color(0xFFFFEDD5),
-                  borderRadius: BorderRadius.circular(14),
-                ),
-                child: FittedBox(
-                  fit: BoxFit.scaleDown,
-                  child: Text(
-                    ok ? '✅ $_learnNote' : '📖 จำไว้นะ: $_learnNote',
-                    style: TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.w900,
-                      color: ok ? const Color(0xFF15803D) : const Color(0xFFC2410C),
-                    ),
-                  ),
-                ),
-              )
-            : Center(
-                key: const ValueKey<String>('hint'),
-                child: Text(
-                  _bonusRound ? '⭐ รอบโบนัส! ตอบถูกดาเมจ x2 + เหรียญ' : '⚡ ตอบให้ไวกว่ามอนสเตอร์!',
-                  style: TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w900,
-                    color: _bonusRound ? const Color(0xFFFFE08A) : const Color(0xFFF7D154),
-                    shadows: const [Shadow(color: Color(0xFF5E3A1A), offset: Offset(0, 1.5), blurRadius: 1)],
-                  ),
-                ),
-              ),
-      ),
-    );
-  }
-
   Widget _choiceButton(int index) {
-    if (index >= currentQuestion.choices.length) return const SizedBox(height: 48);
+    if (index >= currentQuestion.choices.length) return SizedBox(height: 36 * _ui);
     final String choice = currentQuestion.choices[index];
-    if (_hiddenChoices.contains(choice)) return const SizedBox(height: 48);
+    if (_hiddenChoices.contains(choice)) return SizedBox(height: 36 * _ui);
 
     final bool isCorrect = choice == currentQuestion.correctMeaning;
     final bool isPicked = choice == _selectedAnswer;
@@ -5339,8 +5062,7 @@ class _BattleScreenState extends State<BattleScreen>
         behavior: HitTestBehavior.opaque,
         onTap: (_canAct && !tried && !fogged) ? () => _answerQuestion(choice) : null,
         child: Container(
-          height: 44,
-          margin: const EdgeInsets.only(bottom: 4),
+          height: 36 * _ui,
           padding: const EdgeInsets.all(2),
           decoration: BoxDecoration(
             color: edge,
@@ -5352,13 +5074,13 @@ class _BattleScreenState extends State<BattleScreen>
             decoration: BoxDecoration(
               gradient: LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter, colors: [top, bottom]),
               borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: Colors.white.withOpacity(0.35), width: 1.2),
+              border: Border.all(color: Colors.white.withValues(alpha: 0.35), width: 1.2),
             ),
             child: Row(
               children: [
                 Container(
-                  width: 24,
-                  height: 24,
+                  width: 20 * _ui,
+                  height: 20 * _ui,
                   alignment: Alignment.center,
                   decoration: BoxDecoration(
                     shape: BoxShape.circle,
@@ -5366,10 +5088,10 @@ class _BattleScreenState extends State<BattleScreen>
                     border: Border.all(color: Colors.white, width: 1.8),
                   ),
                   child: icon != null
-                      ? Icon(icon, size: 15, color: Colors.white)
+                      ? Icon(icon, size: 13, color: Colors.white)
                       : Text(
                           String.fromCharCode(65 + index),
-                          style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w900, color: Colors.white),
+                          style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w900, color: Colors.white),
                         ),
                 ),
                 const SizedBox(width: 6),
@@ -5378,9 +5100,9 @@ class _BattleScreenState extends State<BattleScreen>
                     child: FittedBox(
                       fit: BoxFit.scaleDown,
                       child: Text(
-                        fogged ? '☁️ ☁️ ☁️' : choice,
-                        style: const TextStyle(
-                          fontSize: 16,
+                        fogged ? '' : choice,
+                        style: TextStyle(
+                          fontSize: 14 * _ui,
                           fontWeight: FontWeight.w900,
                           color: Colors.white,
                           shadows: [Shadow(color: Color(0x66000000), offset: Offset(0, 2))],
@@ -5405,7 +5127,7 @@ class _BattleScreenState extends State<BattleScreen>
         : (timeLeft <= _timeTotal * 0.6 ? const Color(0xFFF59E0B) : const Color(0xFF22C55E));
 
     return Container(
-      padding: const EdgeInsets.fromLTRB(12, 6, 12, 2),
+      padding: EdgeInsets.fromLTRB(12, _gap, 12, _gap),
       decoration: BoxDecoration(
         gradient: const LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter, colors: [_BT.lilacTop, _BT.lilacBottom]),
         borderRadius: const BorderRadius.vertical(top: Radius.circular(26)),
@@ -5431,7 +5153,7 @@ class _BattleScreenState extends State<BattleScreen>
                     child: FittedBox(
                       fit: BoxFit.scaleDown,
                       child: Text(
-                        currentQuestion.category,
+                        currentQuestion.category.split(' ').first, // ชื่อหมวดอย่างเดียว ไม่มีอีโมจิ
                         style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w900),
                       ),
                     ),
@@ -5462,25 +5184,33 @@ class _BattleScreenState extends State<BattleScreen>
               ),
             ],
           ),
-          const SizedBox(height: 6),
+          SizedBox(height: _gap),
           _timerBar(timerColor),
           if (_isSudden) _suddenBanner(),
-          const SizedBox(height: 5),
+          SizedBox(height: _gap),
           _wordCard(),
-          _learnNoteBar(),
-          Row(
-            children: [
-              Expanded(child: _choiceButton(0)),
-              const SizedBox(width: 8),
-              Expanded(child: _choiceButton(1)),
-            ],
-          ),
-          Row(
-            children: [
-              Expanded(child: _choiceButton(2)),
-              const SizedBox(width: 8),
-              Expanded(child: _choiceButton(3)),
-            ],
+          SizedBox(height: _gap),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 4),
+            child: Column(
+              children: [
+                Row(
+                  children: [
+                    Expanded(child: _choiceButton(0)),
+                    SizedBox(width: _gap),
+                    Expanded(child: _choiceButton(1)),
+                  ],
+                ),
+                SizedBox(height: _gap),
+                Row(
+                  children: [
+                    Expanded(child: _choiceButton(2)),
+                    SizedBox(width: _gap),
+                    Expanded(child: _choiceButton(3)),
+                  ],
+                ),
+              ],
+            ),
           ),
         ],
       ),
@@ -5490,16 +5220,13 @@ class _BattleScreenState extends State<BattleScreen>
 
 
 // ---------------------------------------------------------------
-// ป้ายแสดงเหรียญ (UI อย่างเดียว ไม่มีระบบเก็บเหรียญ)
+// ป้ายแสดงเหรียญจริงของบัญชี (เหมือนเกมอื่น ใช้ซื้อไอเทมช่วยเล่นด้วย)
 // ---------------------------------------------------------------
 class _CoinPill extends StatelessWidget {
-  final int coins;
   final Color color;
   final double fontSize;
 
   const _CoinPill({
-    // ignore: unused_element_parameter
-    this.coins = 0,
     // ignore: unused_element_parameter
     this.color = const Color(0xFFB45309),
     this.fontSize = 15,
@@ -5516,7 +5243,7 @@ class _CoinPill extends StatelessWidget {
         border: Border.all(color: const Color(0xFFFFD43B), width: 2),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.12),
+            color: Colors.black.withValues(alpha: 0.12),
             blurRadius: 6,
             offset: const Offset(0, 2),
           ),
@@ -5531,14 +5258,16 @@ class _CoinPill extends StatelessWidget {
             size: fs * 1.45,
           ),
           SizedBox(width: fs * 0.35),
-          Text(
-            '$coins',
+          ValueListenableBuilder<int?>(
+            valueListenable: CoinBalance.value,
+            builder: (_, coins, _) => Text(
+            coins == null ? '-' : '$coins',
             style: TextStyle(
               fontSize: fs,
               fontWeight: FontWeight.w900,
               color: color,
             ),
-          ),
+          )),
         ],
       ),
     );
@@ -5672,4 +5401,170 @@ class _GameScaffoldBody extends StatelessWidget {
       ],
     );
   }
+}
+
+// ---------------------------------------------------------------
+// ฉากต่อสู้ในป่า: ป่าสนสองชั้น ลานดินกลางป่าล้อมด้วยก้อนหิน
+// ธงของฮีโร่ (ฟ้า) กับธงมอนสเตอร์ (แดง)
+// ด่านบอส: ป่ายามค่ำสีแดงเพลิง ดูน่ากลัวกว่า
+// ---------------------------------------------------------------
+class _BattlefieldPainter extends CustomPainter {
+  final Color accent; // สีประจำโลก (ไม่ใช้ในฉากป่า เก็บไว้เผื่อปรับ)
+  final bool boss;
+  const _BattlefieldPainter({required this.accent, this.boss = false});
+
+  double _r(int i, double k) {
+    final double v = math.sin(i * 12.9898 + k * 78.233) * 43758.5453;
+    return v - v.floorToDouble();
+  }
+
+  void _pine(Canvas canvas, double x, double base, double th, double tw, Color color) {
+    final Paint p = Paint()..color = color;
+    for (int k = 0; k < 3; k++) {
+      final double top = base - th + k * th * 0.22;
+      final double bw = tw * (0.55 + k * 0.25);
+      canvas.drawPath(
+        Path()
+          ..moveTo(x, top)
+          ..lineTo(x - bw / 2, top + th * 0.42)
+          ..lineTo(x + bw / 2, top + th * 0.42)
+          ..close(),
+        p,
+      );
+    }
+    canvas.drawRect(Rect.fromLTWH(x - tw * 0.05, base - th * 0.2, tw * 0.1, th * 0.2), p);
+  }
+
+  void _roundTree(Canvas canvas, double x, double base, double r, Color color) {
+    final Paint p = Paint()..color = color;
+    canvas.drawCircle(Offset(x, base - r * 1.3), r, p);
+    canvas.drawCircle(Offset(x - r * 0.6, base - r * 0.8), r * 0.7, p);
+    canvas.drawCircle(Offset(x + r * 0.6, base - r * 0.8), r * 0.7, p);
+    canvas.drawRect(Rect.fromLTWH(x - r * 0.1, base - r * 0.6, r * 0.2, r * 0.6), p);
+  }
+
+  void _bushes(Canvas canvas, double x, double y, double s, Color color) {
+    final Paint p = Paint()..color = color;
+    canvas.drawCircle(Offset(x, y), s, p);
+    canvas.drawCircle(Offset(x + s * 0.9, y + s * 0.2), s * 0.8, p);
+    canvas.drawCircle(Offset(x - s * 0.9, y + s * 0.25), s * 0.75, p);
+  }
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final double w = size.width;
+    final double h = size.height;
+    final double hz = h * 0.60; // ขอบฟ้า
+    final Paint p = Paint()..isAntiAlias = true;
+
+    // ท้องฟ้าในป่า
+    p.shader = LinearGradient(
+      begin: Alignment.topCenter,
+      end: Alignment.bottomCenter,
+      colors: boss
+          ? const [Color(0xFF1B0F1F), Color(0xFF4A1D2E), Color(0xFFC2410C)]
+          : const [Color(0xFF0F3D2E), Color(0xFF2F6B45), Color(0xFFB7E4A0)],
+      stops: const [0.0, 0.6, 1.0],
+    ).createShader(Rect.fromLTWH(0, 0, w, hz));
+    canvas.drawRect(Rect.fromLTWH(0, 0, w, h), p);
+
+    // ต้นไม้แถวหลัง
+    final Color far = boss ? const Color(0xD93C1928) : const Color(0xD91F5135);
+    for (int i = 0; i < 14; i++) {
+      final double x = w * (i + 0.3 * _r(i, 2)) / 13;
+      final double th = h * (0.16 + 0.12 * _r(i, 4));
+      if (i.isOdd) {
+        _pine(canvas, x, hz + 4, th, th * 0.55, far);
+      } else {
+        _roundTree(canvas, x, hz + 4, th * 0.32, far);
+      }
+    }
+
+    // ต้นไม้แถวหน้า (ขอบซ้าย-ขวา)
+    final Color near = boss ? const Color(0xFF2A1220) : const Color(0xFF143D28);
+    _pine(canvas, w * 0.06, hz + h * 0.08, h * 0.5, h * 0.3, near);
+    _pine(canvas, w * 0.20, hz + h * 0.06, h * 0.36, h * 0.22, near);
+    _roundTree(canvas, w * 0.94, hz + h * 0.08, h * 0.15, near);
+    _pine(canvas, w * 0.80, hz + h * 0.06, h * 0.38, h * 0.22, near);
+
+    // พื้นหญ้า
+    final Path ground = Path()
+      ..moveTo(0, hz + h * 0.04)
+      ..quadraticBezierTo(w / 2, hz - h * 0.02, w, hz + h * 0.04)
+      ..lineTo(w, h)
+      ..lineTo(0, h)
+      ..close();
+    p.shader = LinearGradient(
+      begin: Alignment.topCenter,
+      end: Alignment.bottomCenter,
+      colors: boss ? const [Color(0xFF3F3A1E), Color(0xFF1F1A10)] : const [Color(0xFF4C8C3F), Color(0xFF24491F)],
+    ).createShader(Rect.fromLTWH(0, hz, w, h - hz));
+    canvas.drawPath(ground, p);
+    p.shader = null;
+
+    // ใบหญ้า
+    final Paint grass = Paint()
+      ..color = boss ? const Color(0x99786E3C) : const Color(0x998CC86E)
+      ..strokeWidth = 1.5
+      ..strokeCap = StrokeCap.round;
+    for (int i = 0; i < 40; i++) {
+      final double x = _r(i, 13) * w;
+      final double y = hz + h * 0.06 + _r(i, 17) * (h - hz - h * 0.08);
+      canvas.drawLine(Offset(x, y), Offset(x - 2, y - 6), grass);
+      canvas.drawLine(Offset(x, y), Offset(x + 2, y - 7), grass);
+    }
+
+    // ลานดินกลางป่า + ก้อนหินรอบลาน
+    final Offset c = Offset(w / 2, h * 0.86);
+    final Rect clearing = Rect.fromCenter(center: c, width: w * 0.88, height: h * 0.20);
+    p.color = const Color(0x661E140A);
+    canvas.drawOval(clearing.shift(const Offset(0, 4)), p);
+    p.shader = const RadialGradient(colors: [Color(0xFFB08A5A), Color(0xFF7A5535)]).createShader(clearing);
+    canvas.drawOval(clearing, p);
+    p.shader = null;
+    p.color = const Color(0xFF8D8A85);
+    for (int i = 0; i < 10; i++) {
+      final double a = i / 10 * math.pi * 2;
+      canvas.drawOval(
+        Rect.fromCenter(
+          center: Offset(c.dx + math.cos(a) * w * 0.44 * 0.98, c.dy + math.sin(a) * h * 0.10 * 0.98),
+          width: 10,
+          height: 7,
+        ),
+        p,
+      );
+    }
+
+    // พุ่มไม้มุมล่าง
+    final Color bush = boss ? const Color(0xFF24121C) : const Color(0xFF1E5A30);
+    _bushes(canvas, w * 0.02, h * 0.98, h * 0.09, bush);
+    _bushes(canvas, w * 0.98, h * 0.98, h * 0.09, bush);
+
+    // ธงสองฝ่าย: ฮีโร่สีฟ้า (ซ้าย) มอนสเตอร์สีแดง (ขวา)
+    _flag(canvas, Offset(w * 0.10, h * 0.82), h * 0.28, const Color(0xFF3B82F6), toRight: true);
+    _flag(canvas, Offset(w * 0.90, h * 0.82), h * 0.28, const Color(0xFFDC2626), toRight: false);
+  }
+
+  void _flag(Canvas canvas, Offset foot, double height, Color color, {required bool toRight}) {
+    final Paint pole = Paint()
+      ..color = const Color(0xFF5B3A1E)
+      ..strokeWidth = 3
+      ..strokeCap = StrokeCap.round;
+    final Offset top = foot.translate(0, -height);
+    canvas.drawLine(foot, top, pole);
+    final double d = toRight ? 1 : -1;
+    final double fw = height * 0.42;
+    final Path cloth = Path()
+      ..moveTo(top.dx, top.dy + 2)
+      ..quadraticBezierTo(top.dx + d * fw * 0.5, top.dy - 4, top.dx + d * fw, top.dy + 4)
+      ..lineTo(top.dx + d * fw * 0.8, top.dy + height * 0.14)
+      ..lineTo(top.dx + d * fw, top.dy + height * 0.24)
+      ..quadraticBezierTo(top.dx + d * fw * 0.5, top.dy + height * 0.20, top.dx, top.dy + height * 0.24)
+      ..close();
+    canvas.drawPath(cloth, Paint()..color = color);
+    canvas.drawCircle(top, 3.5, Paint()..color = const Color(0xFFFFD166));
+  }
+
+  @override
+  bool shouldRepaint(covariant _BattlefieldPainter old) => old.accent != accent || old.boss != boss;
 }

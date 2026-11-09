@@ -1,6 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 
+import '../../services/lesson_progress.dart';
+import '../../services/listening_results_service.dart';
+import '../../services/sfx.dart';
+
 class ListeningQuizItem {
   final String soundFocus; // หมวดหมู่เสียงที่กำลังฝึก
   final String targetWord;
@@ -20,7 +24,7 @@ class ListeningQuizItem {
 }
 
 class MinimalPairsScreen extends StatefulWidget {
-  const MinimalPairsScreen({Key? key}) : super(key: key);
+  const MinimalPairsScreen({super.key});
 
   @override
   State<MinimalPairsScreen> createState() => _MinimalPairsScreenState();
@@ -33,6 +37,9 @@ class _MinimalPairsScreenState extends State<MinimalPairsScreen> {
   bool isAnswerChecked = false;
   bool isCorrect = false;
   int correctAnswersCount = 0;
+
+  /// The result of this round was already sent (send it once only).
+  bool _resultSent = false;
 
   // 20 ข้อ แบ่งเป็น 4 กลุ่มเสียงชัดเจน กลุ่มละ 5 ข้อ คัดคำศัพท์เข้าใจง่ายสำหรับเด็ก
   final List<ListeningQuizItem> quizList = const [
@@ -205,10 +212,218 @@ class _MinimalPairsScreenState extends State<MinimalPairsScreen> {
     ),
   ];
 
+  /// Saved position id for LessonProgress (shown on the listen menu too).
+  static const String progressId = 'minimal_pairs';
+
   @override
   void initState() {
     super.initState();
     _initTts();
+    // After the first frame, offer to continue where the child stopped.
+    WidgetsBinding.instance.addPostFrameCallback((_) => _offerResume());
+  }
+
+  Future<void> _offerResume() async {
+    final saved = await LessonProgress.load(progressId, quizList.length);
+    if (saved == null || !mounted) return;
+    final resume = await _askResume(saved);
+    if (!mounted) return;
+    if (resume) {
+      setState(() {
+        currentIndex = saved.index;
+        correctAnswersCount = saved.correct;
+        selectedWord = null;
+        isAnswerChecked = false;
+        isCorrect = false;
+      });
+    } else {
+      await LessonProgress.clear(progressId);
+    }
+  }
+
+  /// true = continue, false = start over. Must pick one (no tap-outside).
+  Future<bool> _askResume(({int index, int correct}) saved) async {
+    final total = quizList.length;
+    final focus = quizList[saved.index].soundFocus;
+    final result = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      barrierColor: Colors.black.withValues(alpha: 0.45),
+      builder: (dialogContext) => PopScope(
+        canPop: false,
+        child: Dialog(
+          backgroundColor: Colors.transparent,
+          insetPadding: const EdgeInsets.symmetric(horizontal: 28),
+          child: Container(
+            padding: const EdgeInsets.fromLTRB(22, 22, 22, 20),
+            decoration: BoxDecoration(
+              color: const Color(0xFFFFF8EC),
+              borderRadius: BorderRadius.circular(30),
+              border: Border.all(color: const Color(0xFFFFCC80), width: 2.5),
+              boxShadow: const [
+                BoxShadow(color: Colors.black26, blurRadius: 18, offset: Offset(0, 8)),
+              ],
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // Earphones picture on the game's orange (same as its menu card)
+                Container(
+                  width: 92,
+                  height: 92,
+                  padding: const EdgeInsets.all(14),
+                  decoration: BoxDecoration(
+                    gradient: const LinearGradient(
+                      colors: [Color(0xFFFFA452), Color(0xFFFF7E36)],
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                    ),
+                    borderRadius: BorderRadius.circular(26),
+                    border: Border.all(color: Colors.white, width: 3),
+                    boxShadow: const [
+                      BoxShadow(color: Color(0xFFC75210), offset: Offset(0, 5)),
+                    ],
+                  ),
+                  child: Image.asset(
+                    'assets/images/sentence/earphones.png',
+                    fit: BoxFit.contain,
+                    errorBuilder: (_, __, ___) => const Icon(
+                      Icons.headphones_rounded,
+                      color: Colors.white,
+                      size: 46,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                const Text(
+                  'เล่นต่อจากเดิมไหม ?',
+                  style: TextStyle(
+                    fontSize: 22,
+                    fontWeight: FontWeight.w900,
+                    color: Color(0xFF4E2A00),
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  'ค้างไว้ที่ข้อ ${saved.index + 1} จาก $total • ตอบถูก ${saved.correct} ข้อ',
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    fontSize: 14.5,
+                    fontWeight: FontWeight.w700,
+                    color: Color(0xFF8A6B4F),
+                  ),
+                ),
+                const SizedBox(height: 10),
+                // Which sound group they were on
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(color: const Color(0xFFFFCC80), width: 1.5),
+                  ),
+                  child: Text(
+                    '🎧 $focus',
+                    style: const TextStyle(
+                      fontSize: 13.5,
+                      fontWeight: FontWeight.w900,
+                      color: Color(0xFFE65100),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 14),
+                // Progress bar (20 questions are too many for dots)
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(8),
+                  child: LinearProgressIndicator(
+                    value: saved.index / total,
+                    minHeight: 10,
+                    backgroundColor: const Color(0xFFFFE0B2),
+                    valueColor: const AlwaysStoppedAnimation(Color(0xFFFF7E36)),
+                  ),
+                ),
+                const SizedBox(height: 20),
+                _orangeButton(
+                  label: 'เล่นต่อข้อ ${saved.index + 1}',
+                  icon: Icons.play_arrow_rounded,
+                  primary: true,
+                  onTap: () => Navigator.pop(dialogContext, true),
+                ),
+                const SizedBox(height: 12),
+                _orangeButton(
+                  label: 'เริ่มใหม่ตั้งแต่ข้อ 1',
+                  icon: Icons.replay_rounded,
+                  primary: false,
+                  onTap: () => Navigator.pop(dialogContext, false),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+    return result ?? true;
+  }
+
+  /// 3D pill button matching this game's result screen:
+  /// primary = gold ("กลับหน้าหลัก"), secondary = white/orange ("เล่นอีกครั้ง").
+  Widget _orangeButton({
+    required String label,
+    required IconData icon,
+    required bool primary,
+    required VoidCallback onTap,
+  }) {
+    final Color content = primary ? const Color(0xFF6D4C00) : const Color(0xFFE65100);
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        width: double.infinity,
+        height: primary ? 56 : 52,
+        decoration: BoxDecoration(
+          color: primary ? const Color(0xFFB26A00) : const Color(0xFFBF360C),
+          borderRadius: BorderRadius.circular(28),
+          boxShadow: const [
+            BoxShadow(color: Colors.black26, blurRadius: 8, offset: Offset(0, 4)),
+          ],
+        ),
+        padding: EdgeInsets.only(bottom: primary ? 5 : 4.5),
+        child: Container(
+          decoration: BoxDecoration(
+            color: primary ? null : Colors.white,
+            gradient: primary
+                ? const LinearGradient(
+                  colors: [Color(0xFFFFD54F), Color(0xFFFFB300)],
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                )
+                : null,
+            borderRadius: BorderRadius.circular(26),
+            border: Border.all(
+              color: primary
+                  ? Colors.white.withValues(alpha: 0.8)
+                  : const Color(0xFFFFCC80),
+              width: 1.8,
+            ),
+          ),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(icon, color: content, size: primary ? 26 : 23),
+              const SizedBox(width: 8),
+              Text(
+                label,
+                style: TextStyle(
+                  color: content,
+                  fontSize: primary ? 19 : 18,
+                  fontWeight: FontWeight.w900,
+                  letterSpacing: 0.3,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 
   Future<void> _initTts() async {
@@ -253,6 +468,7 @@ class _MinimalPairsScreenState extends State<MinimalPairsScreen> {
       }
     });
 
+    isRight ? Sfx.correct() : Sfx.wrong();
     _showFeedbackSheet(isRight);
   }
 
@@ -290,7 +506,7 @@ class _MinimalPairsScreenState extends State<MinimalPairsScreen> {
               ),
               const SizedBox(height: 10),
               Text(
-                correct ? 'ถูกต้อง เก่งมาก!' : 'ยังไม่ถูกต้อง ลองอีกครั้ง',
+                correct ? 'ถูกต้อง เก่งมาก !' : 'ยังไม่ถูกต้อง ลองอีกครั้ง',
                 style: const TextStyle(
                   fontSize: 24,
                   fontWeight: FontWeight.w900,
@@ -299,7 +515,7 @@ class _MinimalPairsScreenState extends State<MinimalPairsScreen> {
               ),
               const SizedBox(height: 8),
               Text(
-                'คำที่ถูกต้องคือ: "${quizList[currentIndex].targetWord}"',
+                'คำที่ถูกต้อง คือ  ${quizList[currentIndex].targetWord}',
                 style: const TextStyle(
                   fontSize: 20,
                   fontWeight: FontWeight.w900,
@@ -350,20 +566,38 @@ class _MinimalPairsScreenState extends State<MinimalPairsScreen> {
         isAnswerChecked = false;
         isCorrect = false;
       });
+      // Remember where we are, so leaving now continues from this question.
+      LessonProgress.save(progressId, currentIndex, correctAnswersCount);
     } else {
+      // Finished all 20: next time starts from question 1.
+      LessonProgress.clear(progressId);
+      // Send the score for the parent report (no coins).
+      if (!_resultSent) {
+        _resultSent = true;
+        ListeningResults.submit(
+        game: 'minimal_pairs',
+        score: correctAnswersCount,
+        total: quizList.length,
+      );
+      }
       _showCompletionDialog();
     }
   }
 
   // หน้าจอแสดงผลเมื่อทำครบ 20 ข้อ (ธีมสีส้มทองสดใส 3D)
   void _showCompletionDialog() {
+    Sfx.complete();
     final int accuracyPercent = ((correctAnswersCount / quizList.length) * 100).round();
 
     showGeneralDialog(
       context: context,
       barrierDismissible: false,
       pageBuilder: (context, anim1, anim2) {
-        return Scaffold(
+        // The phone's back button must not close it: that left the game on
+        // the last question, and finishing again sent the result twice.
+        return PopScope(
+          canPop: false,
+          child: Scaffold(
           body: Container(
             width: double.infinity,
             height: double.infinity,
@@ -461,7 +695,7 @@ class _MinimalPairsScreenState extends State<MinimalPairsScreen> {
                                 ),
                               ),
                               child: const Text(
-                                'เรียนจบกิจกรรมเรียบร้อยแล้ว!',
+                                'เรียนจบกิจกรรมเรียบร้อยแล้ว !',
                                 style: TextStyle(
                                   fontSize: 16.5,
                                   fontWeight: FontWeight.w800,
@@ -541,6 +775,7 @@ class _MinimalPairsScreenState extends State<MinimalPairsScreen> {
                                   isAnswerChecked = false;
                                   isCorrect = false;
                                   correctAnswersCount = 0;
+                                  _resultSent = false;
                                 });
                               },
                               child: Container(
@@ -652,7 +887,7 @@ class _MinimalPairsScreenState extends State<MinimalPairsScreen> {
               ],
             ),
           ),
-        );
+        ));
       },
     );
   }
@@ -801,8 +1036,17 @@ class _MinimalPairsScreenState extends State<MinimalPairsScreen> {
                   // ผังองค์ประกอบแนวตั้ง
                   SafeArea(
                     top: false,
-                    child: Padding(
-                      padding: const EdgeInsets.fromLTRB(20, 6, 20, 16),
+                    // Scrolls when the phone is too short to show everything, so
+                    // the check button is never cut off at the bottom.
+                    child: LayoutBuilder(
+                      builder: (context, box) {
+                        return SingleChildScrollView(
+                          padding: const EdgeInsets.fromLTRB(20, 6, 20, 16),
+                          child: ConstrainedBox(
+                            constraints: BoxConstraints(
+                              minHeight: box.maxHeight > 22 ? box.maxHeight - 22 : 0,
+                            ),
+                            child: IntrinsicHeight(
                       child: Column(
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
@@ -843,7 +1087,7 @@ class _MinimalPairsScreenState extends State<MinimalPairsScreen> {
                                       mainAxisSize: MainAxisSize.min,
                                       children: [
                                         Text(
-                                          'ข้อ ${currentIndex + 1}/${quizList.length} • ',
+                                          'ข้อ ${currentIndex + 1} / ${quizList.length} • ',
                                           style: const TextStyle(
                                             fontSize: 15.5,
                                             fontWeight: FontWeight.w800,
@@ -967,6 +1211,10 @@ class _MinimalPairsScreenState extends State<MinimalPairsScreen> {
                           _buildCheckAnswerButton(),
                         ],
                       ),
+                            ),
+                          ),
+                        );
+                      },
                     ),
                   ),
                 ],
@@ -1065,7 +1313,7 @@ class _MinimalPairsScreenState extends State<MinimalPairsScreen> {
             ),
           ),
           child: const Text(
-            'ฟังช้าๆ',
+            'ฟังช้า ๆ',
             style: TextStyle(
               fontSize: 15.5,
               fontWeight: FontWeight.w900,

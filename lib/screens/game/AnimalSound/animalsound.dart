@@ -2,6 +2,12 @@ import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:audioplayers/audioplayers.dart';
 
+import '../../../services/animal_sound_service.dart';
+import '../../../services/coin_balance.dart';
+import '../../../services/guess_progress_service.dart' show GuessCoinResult;
+import '../../../services/listening_results_service.dart';
+import '../../../services/sfx.dart';
+
 class AnimalSound extends StatefulWidget {
   const AnimalSound({super.key});
 
@@ -11,13 +17,24 @@ class AnimalSound extends StatefulWidget {
 
 class _AnimalSoundState extends State<AnimalSound>
     with SingleTickerProviderStateMixin {
-  int score = 0;
-  int combo = 0;
+  int correctCount = 0; // จำนวนข้อที่ตอบถูก
+  bool _answered = false; // กันกดตอบซ้ำระหว่างโชว์ผล
   int currentIndex = 0;
   bool isPlaying = false;
+  bool _loading = true; // กำลังเช็กว่ามีเกมเล่นค้างไว้ไหม
+
+  // เหรียญจริงจากเซิร์ฟเวอร์ (2 เหรียญต่อสัตว์ 1 ตัว ต่อวัน)
+  int _coinsBefore = 0; // เหรียญที่ได้ไปแล้วก่อนกลับมาเล่นต่อ
+  int _coinsNow = 0; // เหรียญที่ได้ในรอบที่เปิดเล่นอยู่นี้
+  final List<Future<GuessCoinResult>> _coinFutures = [];
+  bool _resultSent = false; // ส่งผลให้รายงานผู้ปกครองครั้งเดียว
+
+  static const List<String> _allAnimals = [
+    'BEE', 'BIRD', 'CAT', 'CHICKEN', 'DOG', 'DUCK',
+    'ELEPHANT', 'FROG', 'GECKO', 'LION', 'MONKEY', 'MOUSE', 'SHEEP', 'SNAKE'
+  ];
 
   final AudioPlayer _audioPlayer = AudioPlayer();
-  final AudioPlayer _sfxPlayer = AudioPlayer();
   late AnimationController _animationController;
 
   // ============================================================
@@ -69,6 +86,9 @@ class _AnimalSoundState extends State<AnimalSound>
   void initState() {
     super.initState();
     _initGameData();
+    if (CoinBalance.value.value == null) CoinBalance.refresh();
+    AnimalSoundCoins.flush();
+    _restoreSavedGame();
 
     _animationController = AnimationController(
       vsync: this,
@@ -94,30 +114,200 @@ class _AnimalSoundState extends State<AnimalSound>
       'ELEPHANT', 'FROG', 'GECKO', 'LION', 'MONKEY', 'MOUSE', 'SHEEP', 'SNAKE'
     ];
 
-    for (var q in questions) {
-      final options = List<String>.from(q['options']);
-      while (options.length < 3) {
-        final candidates = allAnimals.where((animal) => !options.contains(animal)).toList();
-        options.add(candidates[random.nextInt(candidates.length)]);
-      }
-      if (options.length > 3) {
-        final correctAnswer = q['correctAnswer'];
-        options.removeWhere((item) => item != correctAnswer);
-        options.shuffle(random);
-        final selectedOptions = options.take(2).toList();
-        selectedOptions.add(correctAnswer);
-        q['options'] = selectedOptions..shuffle(random);
-      } else {
-        options.shuffle(random);
-        q['options'] = options;
-      }
-    }
+    // Every game: the right animal + 2 random others, so the choices
+    // can't be remembered without listening.
+    questions = [
+      for (final q in questions)
+        {
+          ...q,
+          'options': [
+            q['correctAnswer'] as String,
+            ...(allAnimals.where((a) => a != q['correctAnswer']).toList()..shuffle(random)).take(2),
+          ]..shuffle(random),
+        },
+    ];
   }
+
+  // ---------- เล่นต่อจากข้อเดิม (แยกตามบัญชี เก็บบนเซิร์ฟเวอร์ด้วย) ----------
+
+  AnimalSoundRound _currentRound() => AnimalSoundRound(
+        order: [for (final q in questions) q['correctAnswer'] as String],
+        options: [for (final q in questions) List<String>.from(q['options'])],
+        index: currentIndex,
+        correct: correctCount,
+        coins: min(_coinsBefore + _coinsNow, correctCount * kGameCoinsPerWord),
+      );
+
+  Future<void> _restoreSavedGame() async {
+    final animals = _allAnimals.toSet();
+    var saved = await AnimalSoundProgress.load(animals);
+    if (saved == null) {
+      // Nothing on this phone (e.g. reinstalled): ask the server, briefly.
+      await AnimalSoundProgress.sync()
+          .timeout(const Duration(seconds: 4), onTimeout: () {});
+      if (!mounted) return;
+      saved = await AnimalSoundProgress.load(animals);
+    } else {
+      AnimalSoundProgress.sync(); // in the background
+    }
+    if (!mounted) return;
+    setState(() => _loading = false);
+    if (saved == null) {
+      _playSound(); // first question plays by itself
+      return;
+    }
+    final resume = await _askResume(saved);
+    if (!mounted) return;
+    if (resume == true) {
+      final round = saved; // non-null copy for the closure below
+      await _audioPlayer.stop();
+      _animationController.stop();
+      setState(() {
+        questions = [
+          for (int i = 0; i < round.order.length; i++)
+            {
+              'soundPath': rawQuestions.firstWhere(
+                (q) => q['correctAnswer'] == round.order[i],
+              )['soundPath'],
+              'correctAnswer': round.order[i],
+              'options': List<String>.from(round.options[i]),
+            },
+        ];
+        currentIndex = round.index;
+        correctCount = round.correct;
+        _coinsBefore = round.coins;
+        _coinsNow = 0;
+        _coinFutures.clear();
+        _answered = false;
+        _resultSent = false;
+        isPlaying = false;
+      });
+    } else {
+      await AnimalSoundProgress.clear();
+    }
+    if (mounted) _playSound();
+  }
+
+  Future<bool?> _askResume(AnimalSoundRound saved) {
+    return showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) => AlertDialog(
+        backgroundColor: Colors.white,
+        surfaceTintColor: Colors.transparent,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(28),
+          side: BorderSide(color: primarySky.withValues(alpha: 0.35), width: 2.5),
+        ),
+        title: const Row(
+          children: [
+            Icon(Icons.play_circle_fill_rounded, color: primarySky, size: 28),
+            SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                'เล่นค้างไว้',
+                style: TextStyle(
+                  fontSize: 20,
+                  fontWeight: FontWeight.w900,
+                  color: Color(0xFF1E293B),
+                ),
+              ),
+            ),
+          ],
+        ),
+        content: Text(
+          'เล่นถึงข้อ ${saved.index + 1} จาก ${saved.order.length} ข้อ '
+          '(ตอบถูก ${saved.correct} ข้อ)\nจะเล่นต่อเลยไหม ?',
+          style: const TextStyle(
+            fontSize: 15.5,
+            height: 1.5,
+            fontWeight: FontWeight.w600,
+            color: Color(0xFF334155),
+          ),
+        ),
+        actionsPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+        actions: [
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton(
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: primarySky,
+                    side: BorderSide(color: primarySky.withValues(alpha: 0.5), width: 2),
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                  ),
+                  onPressed: () => Navigator.pop(dialogContext, false),
+                  child: const Text(
+                    'เริ่มใหม่',
+                    style: TextStyle(fontWeight: FontWeight.w900, fontSize: 15),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: primarySky,
+                    foregroundColor: Colors.white,
+                    elevation: 0,
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                  ),
+                  onPressed: () => Navigator.pop(dialogContext, true),
+                  child: const Text(
+                    'เล่นต่อ',
+                    style: TextStyle(fontWeight: FontWeight.w900, fontSize: 15),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// End of the game: result for the parent report (once), best score, and
+  /// no unfinished game any more.
+  void _finishGame() {
+    if (!_resultSent) {
+      _resultSent = true;
+      ListeningResults.submit(
+        game: 'animal_sound',
+        score: correctCount,
+        total: questions.length,
+      );
+      AnimalSoundProgress.saveFinished(
+        (correctCount * 100 / questions.length).round().clamp(0, 100).toInt(),
+      );
+    }
+    Sfx.complete();
+    _showCompletionDialog();
+  }
+
+  Widget _coinLine(String text) => Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const _BigGoldCoin(size: 26),
+          const SizedBox(width: 6),
+          Flexible(
+            child: Text(
+              text,
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.w900,
+                color: darkSkyText,
+              ),
+            ),
+          ),
+        ],
+      );
 
   @override
   void dispose() {
     _audioPlayer.dispose();
-    _sfxPlayer.dispose();
     _animationController.dispose();
     super.dispose();
   }
@@ -145,15 +335,16 @@ class _AnimalSoundState extends State<AnimalSound>
     }
   }
 
-  Future<void> _playSfx(bool isCorrect) async {
-    try {
-      await _sfxPlayer.stop();
-      final soundFile = isCorrect ? 'sounds/correct.mp3' : 'sounds/wrong.mp3';
-      await _sfxPlayer.play(AssetSource(soundFile));
-    } catch (_) {}
-  }
+  // dialog ที่ปุ่ม Back ของเครื่องปิดไม่ได้ (กันเกมค้าง/ตอบข้อเดิมซ้ำ)
+  Future<void> _showLockedDialog(WidgetBuilder builder) => showDialog<void>(
+        context: context,
+        barrierDismissible: false,
+        builder: (ctx) => PopScope(canPop: false, child: builder(ctx)),
+      );
 
   Future<void> _checkAnswer(String selected) async {
+    if (_answered || _loading) return;
+    _answered = true;
     await _audioPlayer.stop();
 
     if (!mounted) return;
@@ -166,27 +357,24 @@ class _AnimalSoundState extends State<AnimalSound>
 
     final String correctAnswer = questions[currentIndex]['correctAnswer'];
     final bool isCorrect = selected == correctAnswer;
+    isCorrect ? Sfx.correct() : Sfx.wrong();
 
+    Future<GuessCoinResult>? coinFuture;
     if (isCorrect) {
-      _playSfx(true);
-      setState(() {
-        combo += 1;
-        int earned = 10 + (combo > 1 ? (combo - 1) * 2 : 0);
-        score += earned;
+      coinFuture = AnimalSoundCoins.submit(correctAnswer);
+      _coinFutures.add(coinFuture);
+      coinFuture.then((r) {
+        if (mounted) _coinsNow += r.coins;
       });
-    } else {
-      _playSfx(false);
       setState(() {
-        combo = 0;
+        correctCount += 1;
       });
     }
 
     final String correctEmoji = animalEmojis[correctAnswer] ?? '🐾';
 
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (_) => Dialog(
+    _showLockedDialog(
+      (_) => Dialog(
         backgroundColor: Colors.white,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(32),
@@ -226,9 +414,7 @@ class _AnimalSoundState extends State<AnimalSound>
               ),
               const SizedBox(height: 16),
               Text(
-                isCorrect
-                    ? (combo > 1 ? "เก่งมาก! 🔥 คอมโบ x$combo" : "ถูกต้องแล้วครับ! 🎉")
-                    : "ว้า... ยังไม่ถูกน้า 🥺",
+                isCorrect ? "ถูกต้องแล้วนะ" : "ยังไม่ถูกนะ",
                 style: TextStyle(
                   fontSize: 22,
                   fontWeight: FontWeight.w900,
@@ -238,8 +424,8 @@ class _AnimalSoundState extends State<AnimalSound>
               const SizedBox(height: 8),
               Text(
                 isCorrect
-                    ? "ตัวนี้คือ $correctAnswer ($correctEmoji)"
-                    : "คำตอบที่ถูกคือ $correctAnswer ($correctEmoji)\nลองใหม่ข้อต่อไปนะ!",
+                    ? "ตัวนี้คือ $correctAnswer"
+                    : "คำตอบที่ถูกคือ $correctAnswer\nลองใหม่ข้อต่อไปนะ",
                 textAlign: TextAlign.center,
                 style: const TextStyle(
                   fontSize: 16,
@@ -247,6 +433,20 @@ class _AnimalSoundState extends State<AnimalSound>
                   color: Color(0xFF475569),
                 ),
               ),
+              if (coinFuture != null) ...[
+                const SizedBox(height: 12),
+                FutureBuilder<GuessCoinResult>(
+                  future: coinFuture,
+                  builder: (_, snap) {
+                    final r = snap.data;
+                    if (r == null) return _coinLine('กำลังรับเหรียญ...');
+                    if (r.pending) return _coinLine('+$kGameCoinsPerWord เหรียญ (รอต่อเน็ต)');
+                    if (r.coins > 0) return _coinLine('+${r.coins} เหรียญ');
+                    if (r.alreadyToday) return _coinLine('ตัวนี้ได้เหรียญไปแล้ววันนี้');
+                    return const SizedBox.shrink();
+                  },
+                ),
+              ],
               const SizedBox(height: 20),
               SizedBox(
                 width: double.infinity,
@@ -265,13 +465,16 @@ class _AnimalSoundState extends State<AnimalSound>
                     if (currentIndex < questions.length - 1) {
                       setState(() {
                         currentIndex++;
+                        _answered = false;
                       });
+                      AnimalSoundProgress.save(_currentRound());
+                      _playSound(); // new question plays by itself
                     } else {
-                      _showCompletionDialog();
+                      _finishGame();
                     }
                   },
                   child: Text(
-                    currentIndex < questions.length - 1 ? "ข้อต่อไป ➔" : "ดูผลลัพธ์ 🏆",
+                    currentIndex < questions.length - 1 ? "ข้อต่อไป" : "ดูผลลัพธ์",
                     style: const TextStyle(
                       fontSize: 18,
                       fontWeight: FontWeight.bold,
@@ -288,21 +491,17 @@ class _AnimalSoundState extends State<AnimalSound>
   }
 
   void _showCompletionDialog() {
-    final int maxBaseScore = questions.length * 10;
-    final double percentage = score / maxBaseScore;
+    final double percentage = correctCount / questions.length;
 
-    final bool passedGame = percentage >= 0.5;
-    String feedbackText = "พยายามได้ดีมาก ลองเล่นอีกครั้งนะ! 💪";
+    String feedbackText = "พยายามได้ดีมาก ลองเล่นอีกครั้งนะ";
     if (percentage >= 0.8) {
-      feedbackText = "สุดยอดไปเลย! หนูเก่งมากๆ 👑🎉";
+      feedbackText = "สุดยอดไปเลย เก่งมาก ๆ";
     } else if (percentage >= 0.5) {
-      feedbackText = "เก่งจังเลย! อีกนิดเดียวจะเต็มแล้ว 🌟";
+      feedbackText = "เก่งจังเลย อีกนิดเดียวจะเต็มแล้ว";
     }
 
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (_) => Dialog(
+    _showLockedDialog(
+      (_) => Dialog(
         backgroundColor: Colors.white,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(32),
@@ -313,14 +512,9 @@ class _AnimalSoundState extends State<AnimalSound>
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                Text(
-                  passedGame ? '🏆' : '💪',
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(fontSize: 60),
-                ),
                 const SizedBox(height: 12),
                 const Text(
-                  "จบเกมแล้ว!",
+                  "จบเกมแล้ว",
                   textAlign: TextAlign.center,
                   style: TextStyle(
                     fontSize: 24,
@@ -347,14 +541,34 @@ class _AnimalSoundState extends State<AnimalSound>
                     borderRadius: BorderRadius.circular(20),
                     border: Border.all(color: borderSky, width: 2),
                   ),
-                  child: Text(
-                    "คะแนนรวม: $score คะแนน 🏅",
-                    textAlign: TextAlign.center,
-                    style: const TextStyle(
-                      fontSize: 20,
-                      color: darkSkyText,
-                      fontWeight: FontWeight.w900,
-                    ),
+                  child: Column(
+                    children: [
+                      Text(
+                        "ตอบถูก $correctCount จาก ${questions.length} ข้อ",
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(
+                          fontSize: 20,
+                          color: darkSkyText,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      FutureBuilder<List<GuessCoinResult>>(
+                        future: Future.wait(_coinFutures),
+                        builder: (_, snap) {
+                          final list = snap.data;
+                          if (list == null) return _coinLine('กำลังนับเหรียญ...');
+                          final coins = _coinsBefore +
+                              list.fold<int>(0, (sum, r) => sum + r.coins);
+                          final pending = list.where((r) => r.pending).length;
+                          return _coinLine(
+                            pending > 0
+                                ? 'ได้ $coins เหรียญ (+${pending * kGameCoinsPerWord} รอต่อเน็ต)'
+                                : 'ได้ $coins เหรียญ',
+                          );
+                        },
+                      ),
+                    ],
                   ),
                 ),
                 const SizedBox(height: 20),
@@ -373,14 +587,19 @@ class _AnimalSoundState extends State<AnimalSound>
                       setState(() {
                         _initGameData();
                         currentIndex = 0;
-                        score = 0;
-                        combo = 0;
+                        correctCount = 0;
+                        _coinsBefore = 0;
+                        _coinsNow = 0;
+                        _coinFutures.clear();
+                        _resultSent = false;
+                        _answered = false;
                         isPlaying = false;
                       });
+                      _playSound();
                     },
                     icon: const Icon(Icons.replay_rounded, color: Colors.white),
                     label: const Text(
-                      "เล่นอีกครั้ง 🔄",
+                      "เล่นอีกครั้ง",
                       style: TextStyle(
                         fontSize: 18,
                         fontWeight: FontWeight.bold,
@@ -426,7 +645,8 @@ class _AnimalSoundState extends State<AnimalSound>
   @override
   Widget build(BuildContext context) {
     final currentQ = questions[currentIndex];
-    final double progress = (currentIndex + 1) / questions.length;
+    // Bar = questions answered so far (full only after the last answer).
+    final double progress = (currentIndex + (_answered ? 1 : 0)) / questions.length;
     final List<String> options = List<String>.from(currentQ['options']);
 
     return Scaffold(
@@ -449,7 +669,6 @@ class _AnimalSoundState extends State<AnimalSound>
             child: SafeArea(
               child: Stack(
                 children: [
-                  // วงกลมสว่างจางๆ มุมขวาบน (หลังป้ายเหรียญ)
                   Positioned(
                     top: -50,
                     right: -50,
@@ -457,7 +676,6 @@ class _AnimalSoundState extends State<AnimalSound>
                   ),
                   LayoutBuilder(
                     builder: (context, box) {
-                      // พอดีจอ: ถ้าจอเล็กมากจริงๆ ค่อยให้เลื่อนได้
                       final double contentH = max(box.maxHeight, 560.0);
                       return SingleChildScrollView(
                         physics: const BouncingScrollPhysics(),
@@ -471,17 +689,28 @@ class _AnimalSoundState extends State<AnimalSound>
                                 const SizedBox(height: 8),
                                 _buildProgressCard(progress),
                                 const SizedBox(height: 10),
-                                Expanded(flex: 4, child: _buildSoundCard()),
-                                const SizedBox(height: 10),
+                                Expanded(flex: 5, child: _buildSoundCard()),
+                                // Same gap above and below the sign, so it sits
+                                // halfway between the sound card and the answers.
+                                const SizedBox(height: 14),
                                 _buildQuestionSign(),
-                                const SizedBox(height: 10),
+                                const SizedBox(height: 14),
+                                // Smaller answer cards with a gap between them.
                                 Expanded(
-                                  flex: 6,
+                                  flex: 5,
                                   child: Column(
-                                    children: List.generate(
-                                      options.length,
-                                      (i) => Expanded(child: _buildOptionCard(i, options[i])),
-                                    ),
+                                    mainAxisAlignment: MainAxisAlignment.start,
+                                    children: [
+                                      for (int i = 0; i < options.length; i++) ...[
+                                        if (i > 0) const SizedBox(height: 8),
+                                        Flexible(
+                                          child: SizedBox(
+                                            height: 82,
+                                            child: _buildOptionCard(i, options[i]),
+                                          ),
+                                        ),
+                                      ],
+                                    ],
                                   ),
                                 ),
                               ],
@@ -491,6 +720,15 @@ class _AnimalSoundState extends State<AnimalSound>
                       );
                     },
                   ),
+                  if (_loading)
+                    Positioned.fill(
+                      child: ColoredBox(
+                        color: softSkyBackground.withValues(alpha: 0.85),
+                        child: const Center(
+                          child: CircularProgressIndicator(color: primarySky),
+                        ),
+                      ),
+                    ),
                 ],
               ),
             ),
@@ -512,37 +750,27 @@ class _AnimalSoundState extends State<AnimalSound>
               Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  ShaderMask(
-                    blendMode: BlendMode.srcIn,
-                    shaderCallback: (rect) => const LinearGradient(
-                      colors: [
-                        Color(0xFFF0508C),
-                        Color(0xFFFF8A3D),
-                        Color(0xFFF5C400),
-                        Color(0xFF3DBE6A),
-                        Color(0xFF2D9CDB),
-                        Color(0xFF8E5CF0),
+                  // One strong colour: the deep orange of the top bar.
+                  const Text(
+                    'Animal Sounds',
+                    style: TextStyle(
+                      fontSize: 24,
+                      fontWeight: FontWeight.w900,
+                      color: Color(0xFFE8590C),
+                      letterSpacing: -0.2,
+                      shadows: [
+                        Shadow(
+                          color: Color(0x33E8590C),
+                          offset: Offset(0, 2),
+                          blurRadius: 0,
+                        ),
                       ],
-                    ).createShader(rect),
-                    child: const Text(
-                      'Animal Sounds',
-                      style: TextStyle(
-                        fontSize: 24,
-                        fontWeight: FontWeight.w900,
-                        color: Colors.white,
-                        letterSpacing: -0.2,
-                      ),
                     ),
-                  ),
-                  const SizedBox(width: 6),
-                  Transform.rotate(
-                    angle: 0.35,
-                    child: const Icon(Icons.pets_rounded, color: Color(0xFF7C5CFF), size: 24),
                   ),
                 ],
               ),
               const Text(
-                'ทายเสียงสัตว์สนุกๆ',
+                'ทายเสียงสัตว์สนุก ๆ',
                 style: TextStyle(
                   fontSize: 14,
                   fontWeight: FontWeight.w700,
@@ -566,7 +794,7 @@ class _AnimalSoundState extends State<AnimalSound>
         children: [
           Container(
             margin: const EdgeInsets.only(left: 24),
-            padding: const EdgeInsets.fromLTRB(34, 6, 18, 6),
+            padding: const EdgeInsets.fromLTRB(24, 6, 18, 6),
             decoration: BoxDecoration(
               gradient: const LinearGradient(
                 begin: Alignment.topCenter,
@@ -583,16 +811,13 @@ class _AnimalSoundState extends State<AnimalSound>
                 ),
               ],
             ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Icon(Icons.star_rounded, size: 22, color: Color(0xFFFFC83D)),
-                const SizedBox(width: 4),
-                Text(
-                  '$score',
-                  style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w900, color: Colors.white),
-                ),
-              ],
+            // The account's real coins (same as the other games).
+            child: ValueListenableBuilder<int?>(
+              valueListenable: CoinBalance.value,
+              builder: (_, coins, _) => Text(
+                coins == null ? '-' : '$coins',
+                style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w900, color: Colors.white),
+              ),
             ),
           ),
           const Positioned(left: 0, top: 1, child: _BigGoldCoin(size: 46)),
@@ -622,10 +847,9 @@ class _AnimalSoundState extends State<AnimalSound>
           Row(
             children: [
               const Text(
-                'ข้อที่ ',
+                'ข้อที่',
                 style: TextStyle(fontSize: 16, fontWeight: FontWeight.w900, color: Color(0xFF8A4B14)),
               ),
-              const Text('⭐', style: TextStyle(fontSize: 16)),
               const Spacer(),
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 1),
@@ -644,9 +868,9 @@ class _AnimalSoundState extends State<AnimalSound>
           Container(
             height: 13,
             decoration: BoxDecoration(
-              color: const Color(0xFFDCEBF3),
+              color: const Color(0xFFFFE9D6),
               borderRadius: BorderRadius.circular(10),
-              border: Border.all(color: const Color(0xFFB9D3E2), width: 1.5),
+              border: Border.all(color: const Color(0xFFFFD2AD), width: 1.5),
             ),
             child: ClipRRect(
               borderRadius: BorderRadius.circular(8),
@@ -659,13 +883,9 @@ class _AnimalSoundState extends State<AnimalSound>
                   child: FractionallySizedBox(
                     widthFactor: v,
                     heightFactor: 1,
+                    // One colour: the orange of this game.
                     child: const DecoratedBox(
-                      decoration: BoxDecoration(
-                        gradient: LinearGradient(
-                          colors: [Color(0xFFFF6A4D), Color(0xFF3DD6A6), Color(0xFF46CF8B)],
-                          stops: [0.0, 0.25, 1.0],
-                        ),
-                      ),
+                      decoration: BoxDecoration(color: Color(0xFFF97316)),
                     ),
                   ),
                 ),
@@ -677,7 +897,7 @@ class _AnimalSoundState extends State<AnimalSound>
     );
   }
 
-  // ---------- การ์ดป่า + ปุ่มลำโพง (ยืดหดตามความสูงที่เหลือ) ----------
+  // ---------- การ์ดป่า + ปุ่มลำโพง ----------
   Widget _buildSoundCard() {
     return Container(
       decoration: BoxDecoration(
@@ -697,15 +917,20 @@ class _AnimalSoundState extends State<AnimalSound>
           builder: (context, box) {
             final double ch = box.maxHeight;
             final double s = (ch / 172).clamp(0.6, 1.1);
-            final double btn = (ch - 46).clamp(60.0, 112.0);
-            final double btnTop = min(ch - btn - 3, 32.0);
+            // Centred in the space under the "แตะเพื่อฟังเสียงสัตว์" label.
+            const double labelBottom = 30;
+            final double btn = (ch - labelBottom - 16).clamp(56.0, 104.0);
+            final double btnTop = max(
+              labelBottom,
+              labelBottom + (ch - labelBottom - btn) / 2,
+            );
             return Stack(
               children: [
                 const Positioned.fill(child: CustomPaint(painter: _JunglePainter())),
-                Positioned(left: 2, top: 4, child: Text('🌴', style: TextStyle(fontSize: 34 * s))),
-                Positioned(right: 4, top: 2, child: Text('🌿', style: TextStyle(fontSize: 30 * s))),
+                Positioned(left: 14 * s, bottom: 4, child: Text('🌼', style: TextStyle(fontSize: 22 * s))),
+                Positioned(right: 18 * s, bottom: 2, child: Text('🌷', style: TextStyle(fontSize: 22 * s))),
                 Positioned(left: 64 * s, top: 52 * s, child: Text('🐦', style: TextStyle(fontSize: 26 * s))),
-                Positioned(right: 58 * s, top: 44 * s, child: Text('🦜', style: TextStyle(fontSize: 26 * s))),
+                Positioned(right: 22 * s, top: 82 * s, child: Text('🦜', style: TextStyle(fontSize: 26 * s))),
                 Positioned(left: 8, bottom: 6, child: Text('🦁', style: TextStyle(fontSize: 66 * s))),
                 Positioned(right: 6, bottom: 4, child: Text('🐘', style: TextStyle(fontSize: 70 * s))),
                 Positioned(
@@ -723,7 +948,6 @@ class _AnimalSoundState extends State<AnimalSound>
                       child: const Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          Text('🎧 ', style: TextStyle(fontSize: 13)),
                           Text(
                             'แตะเพื่อฟังเสียงสัตว์',
                             style: TextStyle(fontSize: 13, fontWeight: FontWeight.w900, color: Color(0xFF8A4B14)),
@@ -808,7 +1032,7 @@ class _AnimalSoundState extends State<AnimalSound>
     );
   }
 
-  // ---------- ป้ายไม้คำถาม (+ combo) ----------
+  // ---------- ป้ายไม้คำถาม ----------
   Widget _buildQuestionSign() {
     return Wrap(
       alignment: WrapAlignment.center,
@@ -836,9 +1060,8 @@ class _AnimalSoundState extends State<AnimalSound>
           child: const Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Text('🤔 ', style: TextStyle(fontSize: 20)),
               Text(
-                'Which animal is it?',
+                'สัตว์ตัวไหนเอ่ย ?',
                 style: TextStyle(
                   fontSize: 18,
                   fontWeight: FontWeight.w900,
@@ -849,31 +1072,18 @@ class _AnimalSoundState extends State<AnimalSound>
             ],
           ),
         ),
-        if (combo > 1)
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-            decoration: BoxDecoration(
-              color: const Color(0xFFFFE082),
-              borderRadius: BorderRadius.circular(20),
-              border: Border.all(color: const Color(0xFFFFB300), width: 2),
-            ),
-            child: Text(
-              '🔥 x$combo',
-              style: const TextStyle(color: Color(0xFFBF360C), fontSize: 14, fontWeight: FontWeight.w900),
-            ),
-          ),
       ],
     );
   }
 
-  // ---------- การ์ดตัวเลือก (ลายขน / ขนฟู / เกล็ด) ยืดหดตามพื้นที่ ----------
+  // ---------- การ์ดตัวเลือก ----------
   Widget _buildOptionCard(int index, String title) {
     final pal = _optionPalettes[index % _optionPalettes.length];
     final String emoji = animalEmojis[title] ?? '🐾';
 
     return LayoutBuilder(
       builder: (context, box) {
-        final double cardH = max(box.maxHeight - 8, 40.0); // เผื่อที่ให้เงาด้านล่าง
+        final double cardH = max(box.maxHeight - 8, 40.0);
         final double tile = (cardH - 6 - 16).clamp(32.0, 58.0);
         final double btn = (tile * 0.84).clamp(30.0, 48.0);
         final double titleSize = (tile * 0.42).clamp(15.0, 24.0);
@@ -906,25 +1116,18 @@ class _AnimalSoundState extends State<AnimalSound>
                   child: Stack(
                     children: [
                       Positioned.fill(
-                        child: CustomPaint(painter: _TexturePainter(pal.kind, pal.texBase, pal.texAccent)),
-                      ),
-                      Positioned.fill(
                         child: Padding(
                           padding: const EdgeInsets.symmetric(horizontal: 12),
                           child: Row(
                             children: [
-                              Container(
+                              // The animal emoji on its own (no box around it).
+                              SizedBox(
                                 width: tile,
-                                height: tile,
-                                alignment: Alignment.center,
-                                decoration: BoxDecoration(
-                                  color: Colors.white.withValues(alpha: 0.75),
-                                  borderRadius: BorderRadius.circular(16),
-                                  border: Border.all(color: pal.border.withValues(alpha: 0.55), width: 2.5),
+                                child: Center(
+                                  child: Text(emoji, style: TextStyle(fontSize: tile * 0.72)),
                                 ),
-                                child: Text(emoji, style: TextStyle(fontSize: tile * 0.58)),
                               ),
-                              const SizedBox(width: 16),
+                              const SizedBox(width: 12),
                               Expanded(
                                 child: Text(
                                   title,
@@ -941,10 +1144,10 @@ class _AnimalSoundState extends State<AnimalSound>
                               Container(
                                 width: btn,
                                 height: btn,
-                                padding: const EdgeInsets.all(3.5),
                                 decoration: BoxDecoration(
                                   shape: BoxShape.circle,
-                                  gradient: SweepGradient(colors: pal.ring),
+                                  // One colour: the dark shade of this card's frame.
+                                  color: pal.shadow,
                                   boxShadow: [
                                     BoxShadow(
                                       color: Colors.black.withValues(alpha: 0.2),
@@ -953,17 +1156,7 @@ class _AnimalSoundState extends State<AnimalSound>
                                     ),
                                   ],
                                 ),
-                                child: Container(
-                                  decoration: BoxDecoration(
-                                    shape: BoxShape.circle,
-                                    gradient: LinearGradient(
-                                      begin: Alignment.topCenter,
-                                      end: Alignment.bottomCenter,
-                                      colors: pal.btn,
-                                    ),
-                                  ),
-                                  child: Icon(Icons.touch_app_rounded, color: Colors.white, size: btn * 0.5),
-                                ),
+                                child: Icon(Icons.touch_app_rounded, color: Colors.white, size: btn * 0.5),
                               ),
                             ],
                           ),
@@ -1342,163 +1535,125 @@ class _JunglePainter extends CustomPainter {
     final h = size.height;
     final full = Offset.zero & size;
 
-    // ท้องฟ้า
+    // Soft sky: light blue at the top, warm cream lower down.
     canvas.drawRect(
       full,
       Paint()
         ..shader = const LinearGradient(
           begin: Alignment.topCenter,
           end: Alignment.bottomCenter,
-          colors: [Color(0xFFBDE8F0), Color(0xFFDDF3E4), Color(0xFFD5EDB8)],
-          stops: [0.0, 0.55, 1.0],
+          colors: [Color(0xFFBFE6FF), Color(0xFFE4F4FF), Color(0xFFFFF4E0)],
+          stops: [0.0, 0.5, 1.0],
         ).createShader(full),
     );
 
-    // ต้นไม้ไกลๆ
-    final far = Paint()..color = const Color(0xFF9ED08A).withValues(alpha: 0.55);
-    for (final c in [
-      Offset(w * 0.18, h * 0.5),
-      Offset(w * 0.3, h * 0.46),
-      Offset(w * 0.72, h * 0.48),
-      Offset(w * 0.86, h * 0.44),
-    ]) {
-      canvas.drawCircle(c, h * 0.2, far);
+    // Pastel rainbow behind the speaker button.
+    const rainbow = [
+      Color(0xFFFFB3BA),
+      Color(0xFFFFDFBA),
+      Color(0xFFFFF5BA),
+      Color(0xFFBAFFC9),
+      Color(0xFFBAE1FF),
+    ];
+    final center = Offset(w * 0.5, h * 0.86);
+    for (int i = 0; i < rainbow.length; i++) {
+      final r = h * 0.62 - i * h * 0.045;
+      canvas.drawArc(
+        Rect.fromCircle(center: center, radius: r),
+        pi,
+        pi,
+        false,
+        Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = h * 0.045
+          ..color = rainbow[i].withValues(alpha: 0.75),
+      );
     }
 
-    // ลำต้นข้างๆ
-    final trunk = Paint()..color = const Color(0xFF8A6A4A).withValues(alpha: 0.45);
-    canvas.drawRRect(
-      RRect.fromRectAndRadius(Rect.fromLTWH(w * 0.04, 0, w * 0.035, h * 0.75), const Radius.circular(6)),
-      trunk,
+    // Smiling sun (top right).
+    final sun = Offset(w * 0.86, h * 0.2);
+    final sr = h * 0.1;
+    canvas.drawCircle(sun, sr * 1.7, Paint()..color = const Color(0xFFFFE680).withValues(alpha: 0.35));
+    canvas.drawCircle(sun, sr, Paint()..color = const Color(0xFFFFD54F));
+    final face = Paint()..color = const Color(0xFF8A5A00);
+    canvas.drawCircle(sun + Offset(-sr * 0.35, -sr * 0.15), sr * 0.1, face);
+    canvas.drawCircle(sun + Offset(sr * 0.35, -sr * 0.15), sr * 0.1, face);
+    canvas.drawArc(
+      Rect.fromCenter(center: sun + Offset(0, sr * 0.12), width: sr * 0.8, height: sr * 0.55),
+      0.2,
+      pi - 0.4,
+      false,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = sr * 0.1
+        ..strokeCap = StrokeCap.round
+        ..color = const Color(0xFF8A5A00),
     );
-    canvas.drawRRect(
-      RRect.fromRectAndRadius(Rect.fromLTWH(w * 0.93, 0, w * 0.035, h * 0.7), const Radius.circular(6)),
-      trunk,
-    );
+    canvas.drawCircle(sun + Offset(-sr * 0.55, sr * 0.2), sr * 0.14,
+        Paint()..color = const Color(0xFFFF9E80).withValues(alpha: 0.7));
+    canvas.drawCircle(sun + Offset(sr * 0.55, sr * 0.2), sr * 0.14,
+        Paint()..color = const Color(0xFFFF9E80).withValues(alpha: 0.7));
 
-    // พื้นหญ้า
-    final hill = Path()
-      ..moveTo(0, h * 0.78)
-      ..quadraticBezierTo(w * 0.3, h * 0.66, w * 0.55, h * 0.76)
-      ..quadraticBezierTo(w * 0.8, h * 0.86, w, h * 0.72)
+    // Fluffy clouds.
+    void cloud(double x, double y, double r) {
+      final p = Paint()..color = Colors.white.withValues(alpha: 0.95);
+      canvas.drawCircle(Offset(x, y), r, p);
+      canvas.drawCircle(Offset(x + r * 0.9, y + r * 0.15), r * 0.8, p);
+      canvas.drawCircle(Offset(x - r * 0.9, y + r * 0.2), r * 0.7, p);
+      canvas.drawRRect(
+        RRect.fromRectAndRadius(
+          Rect.fromLTWH(x - r * 1.5, y + r * 0.1, r * 3.1, r * 0.8),
+          Radius.circular(r * 0.4),
+        ),
+        p,
+      );
+    }
+
+    cloud(w * 0.16, h * 0.2, h * 0.075);
+    cloud(w * 0.62, h * 0.12, h * 0.055);
+
+    // Two rolling hills, back and front.
+    final back = Path()
+      ..moveTo(0, h * 0.74)
+      ..quadraticBezierTo(w * 0.25, h * 0.6, w * 0.5, h * 0.72)
+      ..quadraticBezierTo(w * 0.78, h * 0.84, w, h * 0.66)
+      ..lineTo(w, h)
+      ..lineTo(0, h)
+      ..close();
+    canvas.drawPath(back, Paint()..color = const Color(0xFFC8EBA5));
+    final front = Path()
+      ..moveTo(0, h * 0.86)
+      ..quadraticBezierTo(w * 0.35, h * 0.76, w * 0.62, h * 0.86)
+      ..quadraticBezierTo(w * 0.85, h * 0.94, w, h * 0.82)
       ..lineTo(w, h)
       ..lineTo(0, h)
       ..close();
     canvas.drawPath(
-      hill,
+      front,
       Paint()
         ..shader = const LinearGradient(
           begin: Alignment.topCenter,
           end: Alignment.bottomCenter,
-          colors: [Color(0xFFB5E07C), Color(0xFF8CC85A)],
-        ).createShader(Rect.fromLTWH(0, h * 0.65, w, h * 0.35)),
+          colors: [Color(0xFFA6DD7C), Color(0xFF8BCF63)],
+        ).createShader(Rect.fromLTWH(0, h * 0.76, w, h * 0.24)),
     );
 
-    // ใบไม้มุมล่าง
-    void leaf(double x, double y, double len, double angle, Color c) {
-      canvas.save();
-      canvas.translate(x, y);
-      canvas.rotate(angle);
-      canvas.drawOval(Rect.fromCenter(center: Offset.zero, width: len, height: len * 0.38), Paint()..color = c);
-      canvas.restore();
+    // Little flowers on the grass.
+    void flower(double x, double y, double r, Color petal) {
+      final p = Paint()..color = petal;
+      for (int i = 0; i < 5; i++) {
+        final a = i * 2 * pi / 5;
+        canvas.drawCircle(Offset(x + cos(a) * r, y + sin(a) * r), r * 0.75, p);
+      }
+      canvas.drawCircle(Offset(x, y), r * 0.6, Paint()..color = const Color(0xFFFFD54F));
     }
 
-    leaf(w * 0.02, h * 0.95, 70, -0.7, const Color(0xFF5FAE4A).withValues(alpha: 0.9));
-    leaf(w * 0.1, h * 1.0, 60, -1.1, const Color(0xFF7CC35B).withValues(alpha: 0.9));
-    leaf(w * 0.98, h * 0.95, 76, 0.7, const Color(0xFF5FAE4A).withValues(alpha: 0.9));
-    leaf(w * 0.9, h * 1.0, 62, 1.1, const Color(0xFF7CC35B).withValues(alpha: 0.9));
-    leaf(w * 0.0, h * 0.62, 54, 0.5, const Color(0xFFD98BC5).withValues(alpha: 0.8));
-
-    // แสงจากด้านบน
-    final glow = Offset(w * 0.5, 0);
-    canvas.drawCircle(
-      glow,
-      w * 0.45,
-      Paint()
-        ..shader = RadialGradient(
-          colors: [Colors.white.withValues(alpha: 0.5), Colors.white.withValues(alpha: 0)],
-        ).createShader(Rect.fromCircle(center: glow, radius: w * 0.45)),
-    );
+    flower(w * 0.3, h * 0.88, h * 0.022, const Color(0xFFFFFFFF));
+    flower(w * 0.42, h * 0.95, h * 0.02, const Color(0xFFFFB3C7));
+    flower(w * 0.58, h * 0.92, h * 0.022, const Color(0xFFFFFFFF));
+    flower(w * 0.7, h * 0.97, h * 0.02, const Color(0xFFB3D9FF));
   }
 
   @override
   bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
-}
-
-// ---------------------------------------------------------------
-// ลายพื้นผิวฝั่งขวาของการ์ดตัวเลือก (ขน / ขนฟู / เกล็ด)
-// ---------------------------------------------------------------
-class _TexturePainter extends CustomPainter {
-  final _TexKind kind;
-  final Color base;
-  final Color accent;
-
-  const _TexturePainter(this.kind, this.base, this.accent);
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final w = size.width;
-    final h = size.height;
-    final start = w * 0.42;
-    final region = Rect.fromLTWH(start, 0, w - start, h);
-
-    // โทนสีไล่เข้าจากกลางการ์ดไปขวา
-    canvas.drawRect(
-      region,
-      Paint()
-        ..shader = LinearGradient(
-          colors: [base.withValues(alpha: 0.0), base.withValues(alpha: 0.6)],
-        ).createShader(region),
-    );
-
-    double ramp(double x) => ((x - start) / (w * 0.3)).clamp(0.0, 1.0);
-    final rnd = Random(3);
-
-    switch (kind) {
-      case _TexKind.fur:
-        final p = Paint()
-          ..strokeWidth = 1.5
-          ..strokeCap = StrokeCap.round;
-        for (int i = 0; i < 260; i++) {
-          final x = start + rnd.nextDouble() * (w - start);
-          final y = rnd.nextDouble() * h;
-          final a = ramp(x);
-          final len = 6 + rnd.nextDouble() * 7;
-          p.color = (rnd.nextBool() ? base : accent).withValues(alpha: 0.55 * a);
-          canvas.drawLine(Offset(x, y), Offset(x + len * 0.5, y + len), p);
-        }
-        break;
-      case _TexKind.fluff:
-        final p = Paint();
-        for (int i = 0; i < 90; i++) {
-          final x = start + rnd.nextDouble() * (w - start);
-          final y = rnd.nextDouble() * h;
-          final a = ramp(x);
-          final r = 3 + rnd.nextDouble() * 4;
-          p.color = (rnd.nextBool() ? accent : base).withValues(alpha: 0.45 * a);
-          canvas.drawCircle(Offset(x, y), r, p);
-        }
-        break;
-      case _TexKind.scales:
-        final p = Paint();
-        int row = 0;
-        for (double y = 4; y < h; y += 9) {
-          final shift = (row % 2) * 5.0;
-          for (double x = start + shift; x < w; x += 10) {
-            final a = ramp(x);
-            if (a <= 0) continue;
-            p.color = base.withValues(alpha: 0.85 * a);
-            canvas.drawCircle(Offset(x, y), 5.2, p);
-            p.color = accent.withValues(alpha: 0.7 * a);
-            canvas.drawCircle(Offset(x - 1.4, y - 1.4), 1.8, p);
-          }
-          row++;
-        }
-        break;
-    }
-  }
-
-  @override
-  bool shouldRepaint(covariant _TexturePainter old) =>
-      old.kind != kind || old.base != base || old.accent != accent;
 }

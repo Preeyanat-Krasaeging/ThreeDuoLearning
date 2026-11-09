@@ -1,6 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 
+import '../../services/lesson_progress.dart';
+import '../../services/listening_results_service.dart';
+import '../../services/sfx.dart';
+
 // -------------------------------------------------------------
 // 1. Data Models
 // -------------------------------------------------------------
@@ -23,8 +27,20 @@ class AudioFillLessonItem {
     required this.thaiTranslation,
   });
 
+  static final RegExp _leadingPunctuation = RegExp(r'^[.,!?;:]+');
+
+  /// Punctuation that must stick to the blank word, e.g. "." in "I like ___."
+  String get suffixPunctuation =>
+      _leadingPunctuation.firstMatch(suffixText.trimLeft())?.group(0) ?? '';
+
+  /// The rest of the suffix after that punctuation, e.g. "songs." stays whole.
+  String get suffixRest =>
+      suffixText.trimLeft().substring(suffixPunctuation.length).trim();
+
   String get fullSentence {
-    final combined = '$prefixText $missingWord $suffixText'.trim();
+    // No space before punctuation: "I like swimming." not "I like swimming ."
+    final rest = suffixRest.isEmpty ? '' : ' $suffixRest';
+    final combined = '$prefixText $missingWord$suffixPunctuation$rest'.trim();
     return combined.replaceAll(RegExp(r'\s+'), ' ');
   }
 }
@@ -52,15 +68,260 @@ class FillBlankTopic {
 // -------------------------------------------------------------
 // 2. หน้าเลือกบทเรียน (Topic Selector)
 // -------------------------------------------------------------
-class VideoFillBlankScreen extends StatelessWidget {
+class VideoFillBlankScreen extends StatefulWidget {
   final List<AudioFillLessonItem>? topicLessons;
   final String? topicTitle;
 
   const VideoFillBlankScreen({
-    Key? key,
+    super.key,
     this.topicLessons,
     this.topicTitle,
-  }) : super(key: key);
+  });
+
+  @override
+  State<VideoFillBlankScreen> createState() => _VideoFillBlankScreenState();
+}
+
+class _VideoFillBlankScreenState extends State<VideoFillBlankScreen> {
+  // Saved "continue from question N" per topic (see LessonProgress).
+  Map<String, ({int index, int correct})> _progress = {};
+
+  @override
+  void initState() {
+    super.initState();
+    _loadProgress();
+  }
+
+  Future<void> _loadProgress() async {
+    final loaded = <String, ({int index, int correct})>{};
+    for (final topic in _get5Topics()) {
+      final saved = await LessonProgress.load(topic.id, topic.lessons.length);
+      if (saved != null) loaded[topic.id] = saved;
+    }
+    if (mounted) setState(() => _progress = loaded);
+  }
+
+  Future<void> _openTopic(FillBlankTopic topic) async {
+    final saved = _progress[topic.id];
+    var startIndex = 0;
+    var startCorrect = 0;
+    if (saved != null) {
+      final resume = await _askResume(topic, saved);
+      if (resume == null || !mounted) return; // closed the dialog
+      if (resume) {
+        startIndex = saved.index;
+        startCorrect = saved.correct;
+      } else {
+        await LessonProgress.clear(topic.id);
+      }
+    }
+    if (!mounted) return;
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => VideoFillBlankExerciseScreen(
+          lessons: topic.lessons,
+          topicTitle: topic.titleTh,
+          topicId: topic.id,
+          startIndex: startIndex,
+          startCorrect: startCorrect,
+        ),
+      ),
+    );
+    _loadProgress(); // refresh the "continue" badges
+  }
+
+  /// true = continue, false = start over, null = dismissed.
+  Future<bool?> _askResume(
+    FillBlankTopic topic,
+    ({int index, int correct}) saved,
+  ) {
+    final total = topic.lessons.length;
+    return showDialog<bool>(
+      context: context,
+      barrierColor: Colors.black.withValues(alpha: 0.45),
+      builder: (dialogContext) => Dialog(
+        backgroundColor: Colors.transparent,
+        insetPadding: const EdgeInsets.symmetric(horizontal: 28),
+        child: Container(
+          padding: const EdgeInsets.fromLTRB(22, 22, 22, 20),
+          decoration: BoxDecoration(
+            color: const Color(0xFFFFF5F7),
+            borderRadius: BorderRadius.circular(30),
+            border: Border.all(color: const Color(0xFFF8BBD0), width: 2.5),
+            boxShadow: const [
+              BoxShadow(color: Colors.black26, blurRadius: 18, offset: Offset(0, 8)),
+            ],
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Topic picture on the topic's own colours (same as its card)
+              Container(
+                width: 92,
+                height: 92,
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    colors: topic.gradientColors,
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                  ),
+                  borderRadius: BorderRadius.circular(26),
+                  border: Border.all(color: Colors.white, width: 3),
+                  boxShadow: [
+                    BoxShadow(
+                      color: topic.shadowColor.withValues(alpha: 0.45),
+                      blurRadius: 0,
+                      offset: const Offset(0, 5),
+                    ),
+                  ],
+                ),
+                child: Image.asset(
+                  topic.imageAsset,
+                  fit: BoxFit.contain,
+                  errorBuilder: (_, __, ___) => const Icon(
+                    Icons.menu_book_rounded,
+                    color: Colors.white,
+                    size: 46,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
+              const Text(
+                'เล่นต่อจากเดิมไหม ?',
+                style: TextStyle(
+                  fontSize: 22,
+                  fontWeight: FontWeight.w900,
+                  color: Color(0xFF33091B),
+                ),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                '${topic.titleTh} ค้างไว้ที่ข้อ ${saved.index + 1} จาก $total\n'
+                'ตอบถูกไปแล้ว ${saved.correct} ข้อ',
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  fontSize: 14.5,
+                  height: 1.45,
+                  fontWeight: FontWeight.w700,
+                  color: Color(0xFF7E7278),
+                ),
+              ),
+              const SizedBox(height: 14),
+              // Progress dots, like the "ข้อที่ x จาก y" pill in the game
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: List.generate(total, (i) {
+                  final done = i < saved.index;
+                  final current = i == saved.index;
+                  return AnimatedContainer(
+                    duration: const Duration(milliseconds: 200),
+                    margin: const EdgeInsets.symmetric(horizontal: 3),
+                    width: current ? 20 : 9,
+                    height: 9,
+                    decoration: BoxDecoration(
+                      color: done || current
+                          ? const Color(0xFFC2185B)
+                          : const Color(0xFFF8BBD0),
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                  );
+                }),
+              ),
+              const SizedBox(height: 20),
+              _pinkButton(
+                label: 'เล่นต่อข้อ ${saved.index + 1}',
+                icon: Icons.play_arrow_rounded,
+                primary: true,
+                onTap: () => Navigator.pop(dialogContext, true),
+              ),
+              const SizedBox(height: 12),
+              _pinkButton(
+                label: 'เริ่มใหม่ตั้งแต่ข้อ 1',
+                icon: Icons.replay_rounded,
+                primary: false,
+                onTap: () => Navigator.pop(dialogContext, false),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// 3D pill button in the same style as the result screen's buttons:
+  /// primary = pink gradient, secondary = white with pink border.
+  Widget _pinkButton({
+    required String label,
+    required IconData icon,
+    required bool primary,
+    required VoidCallback onTap,
+  }) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        width: double.infinity,
+        height: primary ? 56 : 52,
+        decoration: BoxDecoration(
+          color: const Color(0xFF880E4F),
+          borderRadius: BorderRadius.circular(28),
+          boxShadow: const [
+            BoxShadow(color: Colors.black26, blurRadius: 8, offset: Offset(0, 4)),
+          ],
+        ),
+        padding: EdgeInsets.only(bottom: primary ? 5 : 4.5),
+        child: Container(
+          decoration: BoxDecoration(
+            color: primary ? null : Colors.white,
+            gradient: primary
+                ? const LinearGradient(
+                  colors: [Color(0xFFFF80AB), Color(0xFFFF4081)],
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                )
+                : null,
+            borderRadius: BorderRadius.circular(26),
+            border: Border.all(
+              color: primary
+                  ? Colors.white.withValues(alpha: 0.8)
+                  : const Color(0xFFF8BBD0),
+              width: 1.8,
+            ),
+          ),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(
+                icon,
+                color: primary ? Colors.white : const Color(0xFFC2185B),
+                size: primary ? 26 : 23,
+              ),
+              const SizedBox(width: 8),
+              Text(
+                label,
+                style: TextStyle(
+                  color: primary ? Colors.white : const Color(0xFFC2185B),
+                  fontSize: primary ? 19 : 18,
+                  fontWeight: FontWeight.w900,
+                  letterSpacing: 0.3,
+                  shadows: primary
+                      ? const [
+                        Shadow(
+                          color: Color(0xFF880E4F),
+                          offset: Offset(0, 1.5),
+                          blurRadius: 2,
+                        ),
+                      ]
+                      : null,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 
   List<FillBlankTopic> _get5Topics() {
     return const [
@@ -248,7 +509,7 @@ class VideoFillBlankScreen extends StatelessWidget {
             missingWord: 'milk',
             suffixText: 'every morning.',
             choices: ['juice', 'milk', 'water'],
-            thaiTranslation: 'ฉันดื่มนมทุกๆ เช้า',
+            thaiTranslation: 'ฉันดื่มนมทุก ๆ เช้า',
           ),
           AudioFillLessonItem(
             title: 'อาหาร 2',
@@ -266,7 +527,7 @@ class VideoFillBlankScreen extends StatelessWidget {
             missingWord: 'soup',
             suffixText: 'for dinner.',
             choices: ['rice', 'soup', 'bread'],
-            thaiTranslation: 'พวกเราทานซุปร้อนๆ เป็นมื้อเย็น',
+            thaiTranslation: 'พวกเราทานซุปร้อน ๆ เป็นมื้อเย็น',
           ),
           AudioFillLessonItem(
             title: 'อาหาร 4',
@@ -311,7 +572,7 @@ class VideoFillBlankScreen extends StatelessWidget {
             missingWord: 'rice',
             suffixText: 'every day.',
             choices: ['rice', 'cake', 'cookie'],
-            thaiTranslation: 'พวกเราทานข้าวอร่อยๆ ทุกวัน',
+            thaiTranslation: 'พวกเราทานข้าวอร่อย ๆ ทุกวัน',
           ),
         ],
       ),
@@ -359,7 +620,7 @@ class VideoFillBlankScreen extends StatelessWidget {
             missingWord: 'children',
             suffixText: 'at the hospital.',
             choices: ['animals', 'children', 'birds'],
-            thaiTranslation: 'คุณหมอใจดีช่วยเหลือเด็กๆ ที่โรงพยาบาล',
+            thaiTranslation: 'คุณหมอใจดีช่วยเหลือเด็ก ๆ ที่โรงพยาบาล',
           ),
           AudioFillLessonItem(
             title: 'บุคคล 5',
@@ -429,7 +690,7 @@ class VideoFillBlankScreen extends StatelessWidget {
           ),
           AudioFillLessonItem(
             title: 'สถานที่ 3',
-            placeholderImage: 'assets/images/sentence/places.png',
+            placeholderImage: 'assets/images/sentence/park.gif',
             prefixText: 'We go to the green',
             missingWord: 'park',
             suffixText: 'on Sunday.',
@@ -456,7 +717,7 @@ class VideoFillBlankScreen extends StatelessWidget {
           ),
           AudioFillLessonItem(
             title: 'สถานที่ 6',
-            placeholderImage: 'assets/images/sentence/schoolk.gif',
+            placeholderImage: 'assets/images/sentence/school.gif',
             prefixText: 'We learn lessons at the',
             missingWord: 'school',
             suffixText: '.',
@@ -488,10 +749,10 @@ class VideoFillBlankScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    if (topicLessons != null) {
+    if (widget.topicLessons != null) {
       return VideoFillBlankExerciseScreen(
-        lessons: topicLessons!,
-        topicTitle: topicTitle ?? 'ฟังเสียงเติมคำ',
+        lessons: widget.topicLessons!,
+        topicTitle: widget.topicTitle ?? 'ฟังเสียงเติมคำ',
       );
     }
 
@@ -545,7 +806,7 @@ class VideoFillBlankScreen extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: const [
                   Text(
-                    'พร้อมฝึกฟังกันหรือยัง?',
+                    'พร้อมฝึกฟังกันหรือยัง ?',
                     style: TextStyle(
                       fontSize: 22,
                       fontWeight: FontWeight.w900,
@@ -586,17 +847,7 @@ class VideoFillBlankScreen extends StatelessWidget {
 
   Widget _buildSampleStyleCard(BuildContext context, FillBlankTopic topic) {
     return GestureDetector(
-      onTap: () {
-        Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (context) => VideoFillBlankExerciseScreen(
-              lessons: topic.lessons,
-              topicTitle: topic.titleTh,
-            ),
-          ),
-        );
-      },
+      onTap: () => _openTopic(topic),
       child: Container(
         height: 118,
         decoration: BoxDecoration(
@@ -663,6 +914,42 @@ class VideoFillBlankScreen extends StatelessWidget {
                         letterSpacing: 0.3,
                       ),
                     ),
+                    if (_progress[topic.id] != null) ...[
+                      const SizedBox(height: 6),
+                      // "Continue" badge in the card's own colour
+                      Container(
+                        padding: const EdgeInsets.fromLTRB(6, 3, 10, 3),
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(20),
+                          boxShadow: [
+                            BoxShadow(
+                              color: topic.shadowColor.withValues(alpha: 0.6),
+                              offset: const Offset(0, 2),
+                            ),
+                          ],
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              Icons.play_circle_fill_rounded,
+                              size: 16,
+                              color: topic.shadowColor,
+                            ),
+                            const SizedBox(width: 4),
+                            Text(
+                              'เล่นต่อ ข้อ ${_progress[topic.id]!.index + 1} / ${topic.lessons.length}',
+                              style: TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w900,
+                                color: topic.shadowColor,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
                   ],
                 ),
               ),
@@ -698,11 +985,19 @@ class VideoFillBlankExerciseScreen extends StatefulWidget {
   final List<AudioFillLessonItem> lessons;
   final String topicTitle;
 
+  /// When set, progress is saved so the child can continue later.
+  final String? topicId;
+  final int startIndex;
+  final int startCorrect;
+
   const VideoFillBlankExerciseScreen({
-    Key? key,
+    super.key,
     required this.lessons,
     required this.topicTitle,
-  }) : super(key: key);
+    this.topicId,
+    this.startIndex = 0,
+    this.startCorrect = 0,
+  });
 
   @override
   State<VideoFillBlankExerciseScreen> createState() => _VideoFillBlankExerciseScreenState();
@@ -717,12 +1012,19 @@ class _VideoFillBlankExerciseScreenState extends State<VideoFillBlankExerciseScr
   bool isPlayingAudio = false;
   int correctAnswersCount = 0;
 
+  /// The result of this round was already sent (send it once only).
+  bool _resultSent = false;
+
   static const Color primaryBerry = Color(0xFFC2185B);
   static const Color darkBerryShadow = Color(0xFF880E4F);
 
   @override
   void initState() {
     super.initState();
+    if (widget.startIndex > 0 && widget.startIndex < widget.lessons.length) {
+      currentIndex = widget.startIndex;
+      correctAnswersCount = widget.startCorrect;
+    }
     _initTts();
   }
 
@@ -757,7 +1059,7 @@ class _VideoFillBlankExerciseScreenState extends State<VideoFillBlankExerciseScr
     if (selectedWord == null) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: const Text('แตะเลือกคำตอบก่อนนะจ๊ะ! 😊'),
+          content: const Text('แตะเลือกคำตอบก่อนนะจ๊ะ !'),
           backgroundColor: primaryBerry,
           behavior: SnackBarBehavior.floating,
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
@@ -777,6 +1079,7 @@ class _VideoFillBlankExerciseScreenState extends State<VideoFillBlankExerciseScr
       }
     });
 
+    correct ? Sfx.correct() : Sfx.wrong();
     _showFeedbackSheet(correct);
   }
 
@@ -814,7 +1117,7 @@ class _VideoFillBlankExerciseScreenState extends State<VideoFillBlankExerciseScr
               ),
               const SizedBox(height: 10),
               Text(
-                correct ? 'ถูกต้อง เก่งมาก!' : 'ยังไม่ถูกต้อง ลองอีกครั้งนะ!',
+                correct ? 'ถูกต้อง เก่งมาก !' : 'ยังไม่ถูกต้อง ลองอีกครั้งนะ !',
                 style: const TextStyle(
                   fontSize: 24,
                   fontWeight: FontWeight.w900,
@@ -823,7 +1126,7 @@ class _VideoFillBlankExerciseScreenState extends State<VideoFillBlankExerciseScr
               ),
               const SizedBox(height: 8),
               Text(
-                'ประโยคที่ถูกต้องคือ: "${widget.lessons[currentIndex].fullSentence}"',
+                'ประโยคที่ถูกต้อง คือ ${widget.lessons[currentIndex].fullSentence}',
                 textAlign: TextAlign.center,
                 style: const TextStyle(
                   fontSize: 18,
@@ -875,7 +1178,25 @@ class _VideoFillBlankExerciseScreenState extends State<VideoFillBlankExerciseScr
         isCorrect = false;
         isPlayingAudio = false;
       });
+      // Remember where we are, so leaving now continues from this question.
+      final topicId = widget.topicId;
+      if (topicId != null) {
+        LessonProgress.save(topicId, currentIndex, correctAnswersCount);
+      }
     } else {
+      // Finished: next time the topic starts from question 1.
+      final topicId = widget.topicId;
+      if (topicId != null) LessonProgress.clear(topicId);
+      // Send the score for the parent report (no coins).
+      if (!_resultSent) {
+        _resultSent = true;
+        ListeningResults.submit(
+        game: 'fill_blank',
+        topic: topicId ?? 'custom',
+        score: correctAnswersCount,
+        total: widget.lessons.length,
+      );
+      }
       _showCompletionDialog();
     }
   }
@@ -884,13 +1205,18 @@ class _VideoFillBlankExerciseScreenState extends State<VideoFillBlankExerciseScr
   // หน้าจอแสดงผลสรุปเมื่อทำครบ (ธีมชมพูหวานสดใส 3D)
   // -------------------------------------------------------------
   void _showCompletionDialog() {
+    Sfx.complete();
     final int accuracyPercent = ((correctAnswersCount / widget.lessons.length) * 100).round();
 
     showGeneralDialog(
       context: context,
       barrierDismissible: false,
       pageBuilder: (context, anim1, anim2) {
-        return Scaffold(
+        // The phone's back button must not close it: that left the game on
+        // the last question, and finishing again sent the result twice.
+        return PopScope(
+          canPop: false,
+          child: Scaffold(
           body: Container(
             width: double.infinity,
             height: double.infinity,
@@ -987,7 +1313,7 @@ class _VideoFillBlankExerciseScreenState extends State<VideoFillBlankExerciseScr
                                 ),
                               ),
                               child: Text(
-                                'เรียนจบหมวด ${widget.topicTitle} แล้ว!',
+                                'เรียนจบหมวด ${widget.topicTitle} แล้ว !',
                                 textAlign: TextAlign.center,
                                 style: const TextStyle(
                                   fontSize: 16.5,
@@ -1068,6 +1394,7 @@ class _VideoFillBlankExerciseScreenState extends State<VideoFillBlankExerciseScr
                                   isChecked = false;
                                   isCorrect = false;
                                   correctAnswersCount = 0;
+                                  _resultSent = false;
                                 });
                               },
                               child: Container(
@@ -1183,7 +1510,7 @@ class _VideoFillBlankExerciseScreenState extends State<VideoFillBlankExerciseScr
               ],
             ),
           ),
-        );
+        ));
       },
     );
   }
@@ -1517,7 +1844,10 @@ class _VideoFillBlankExerciseScreenState extends State<VideoFillBlankExerciseScr
               ),
               if (item.suffixText.isNotEmpty)
                 Text(
-                  ' ${item.suffixText}',
+                  // No space before "." ("I like swimming.")
+                  item.suffixPunctuation.isNotEmpty
+                      ? item.suffixText.trimLeft()
+                      : ' ${item.suffixText}',
                   style: const TextStyle(
                     fontSize: 26,
                     fontWeight: FontWeight.w900,
@@ -1528,7 +1858,7 @@ class _VideoFillBlankExerciseScreenState extends State<VideoFillBlankExerciseScr
           ),
           const SizedBox(height: 6),
           Text(
-            '“${item.thaiTranslation}”',
+            item.thaiTranslation,
             textAlign: TextAlign.center,
             style: const TextStyle(
               fontSize: 14.5,

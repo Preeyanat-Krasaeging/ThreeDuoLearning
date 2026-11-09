@@ -1,114 +1,208 @@
 import 'package:flutter/material.dart';
+import '../../../services/word_search_progress_service.dart';
+import '../../../widgets/coin_balance_chip.dart';
+import 'word_search_data.dart';
 import 'word_search_play_screen.dart';
 
-// --- โมเดลข้อมูลหมวดหมู่ Word Search ---
-class WordSearchCategoryItem {
-  final String key;
-  final String titleTh;
-  final String titleEn;
-  final String cardImagePath;
-  final Color cardColor;
-  final Color shadowColor;
+export 'word_search_data.dart' show WordSearchCategoryItem, wordSearchCategories;
 
-  const WordSearchCategoryItem({
-    required this.key,
-    required this.titleTh,
-    required this.titleEn,
-    required this.cardImagePath,
-    required this.cardColor,
-    required this.shadowColor,
-  });
-}
-
-// ----------------------------------------------------
-// หน้าเลือกหมวดหมู่ (Category Selection Screen)
-// ----------------------------------------------------
-class WordSearchScreen extends StatelessWidget {
+class WordSearchScreen extends StatefulWidget {
   const WordSearchScreen({super.key});
 
-  final List<WordSearchCategoryItem> categories = const [
-    // 1. สัตว์
-    WordSearchCategoryItem(
-      key: 'animal',
-      titleTh: 'สัตว์',
-      titleEn: 'ANIMAL SAFARI',
-      cardImagePath: 'assets/images/Background/word_search_animal.png',
-      cardColor: Color(0xFF26A69A),
-      shadowColor: Color(0xFF00796B),
-    ),
-    // 2. กีฬา
-    WordSearchCategoryItem(
-      key: 'sport',
-      titleTh: 'กีฬา',
-      titleEn: 'ACTIVE SPORTS',
-      cardImagePath: 'assets/images/Background/word_search_sport.png',
-      cardColor: Color(0xFF29B6F6),
-      shadowColor: Color(0xFF0288D1),
-    ),
-    // 3. อาชีพ
-    WordSearchCategoryItem(
-      key: 'career',
-      titleTh: 'อาชีพ',
-      titleEn: 'CAREER JOBS',
-      cardImagePath: 'assets/images/Background/word_search_job.png',
-      cardColor: Color(0xFFFFA726),
-      shadowColor: Color(0xFFE65100),
-    ),
-    // 4. บ้าน
-    WordSearchCategoryItem(
-      key: 'home',
-      titleTh: 'บ้าน',
-      titleEn: 'SWEET HOME',
-      cardImagePath: 'assets/images/Background/word_search_house.png',
-      cardColor: Color(0xFFEC407A),
-      shadowColor: Color(0xFFC2185B),
-    ),
-    // 5. ยานพาหนะ
-    WordSearchCategoryItem(
-      key: 'vehicle',
-      titleTh: 'ยานพาหนะ',
-      titleEn: 'VEHICLES TRIP',
-      cardImagePath: 'assets/images/Background/word_search_vehicle.png',
-      cardColor: Color(0xFFAB47BC),
-      shadowColor: Color(0xFF7B1FA2),
-    ),
-    // 6. สถานที่
-    WordSearchCategoryItem(
-      key: 'location',
-      titleTh: 'สถานที่',
-      titleEn: 'AMAZING PLACES',
-      cardImagePath: 'assets/images/Background/word_search_location.png',
-      cardColor: Color(0xFFFF5722),
-      shadowColor: Color(0xFFBF360C),
-    ),
-    // 7. เสื้อผ้า
-    WordSearchCategoryItem(
-      key: 'clothing',
-      titleTh: 'เสื้อผ้า',
-      titleEn: 'MY CLOTHES',
-      cardImagePath: 'assets/images/Background/word_search_clothes.png',
-      cardColor: Color(0xFF5C6BC0),
-      shadowColor: Color(0xFF3949AB),
-    ),
-    // 8. ผลไม้
-    WordSearchCategoryItem(
-      key: 'fruit',
-      titleTh: 'ผลไม้',
-      titleEn: 'JUICY FRUITS',
-      cardImagePath: 'assets/images/Background/word_search_fruit.png',
-      cardColor: Color(0xFFFFCA28),
-      shadowColor: Color(0xFFF57F17),
-    ),
-    // 9. อาหาร
-    WordSearchCategoryItem(
-      key: 'food',
-      titleTh: 'อาหาร',
-      titleEn: 'YUMMY FOOD',
-      cardImagePath: 'assets/images/Background/word_search_food.png',
-      cardColor: Color(0xFF66BB6A),
-      shadowColor: Color(0xFF2E7D32),
-    ),
-  ];
+  @override
+  State<WordSearchScreen> createState() => _WordSearchScreenState();
+}
+
+class _WordSearchScreenState extends State<WordSearchScreen> {
+  static const List<WordSearchCategoryItem> categories = wordSearchCategories;
+
+  /// For the badges: unfinished games and finished categories.
+  Map<String, ({int done, int total})> _unfinished = {};
+  Map<String, int> _best = {};
+
+  @override
+  void initState() {
+    super.initState();
+    _loadBadges();
+    // Progress saved on the server (e.g. another phone), then refresh.
+    WordSearchProgress.sync().then((_) => _loadBadges());
+    WordSearchCoins.flush(); // coins of words found while offline
+  }
+
+  Map<String, Set<String>> get _wordsByCategory => {
+    for (final c in categories) c.key: c.answers,
+  };
+
+  Future<void> _loadBadges() async {
+    final unfinished = await WordSearchProgress.unfinished(_wordsByCategory);
+    final best = await WordSearchProgress.bestScores();
+    if (!mounted) return;
+    setState(() {
+      _unfinished = unfinished;
+      _best = best;
+    });
+  }
+
+  Future<void> _open(WordSearchCategoryItem category) async {
+    final saved = await WordSearchProgress.load(category.key, category.answers);
+    if (!mounted) return;
+    WordSearchRound? resume;
+    if (saved != null) {
+      final choice = await _askResume(category, saved);
+      if (!mounted || choice == null) return;
+      if (choice) {
+        resume = saved;
+      } else {
+        await WordSearchProgress.clear(category.key);
+      }
+    }
+    if (!mounted) return;
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => WordSearchPlayScreen(category: category, resume: resume),
+      ),
+    );
+    _loadBadges();
+  }
+
+  Future<bool?> _askResume(WordSearchCategoryItem category, WordSearchRound saved) {
+    final color = category.shadowColor;
+    return showDialog<bool>(
+      context: context,
+      builder:
+          (dialogContext) => AlertDialog(
+            backgroundColor: Colors.white,
+            surfaceTintColor: Colors.transparent,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(28),
+              side: BorderSide(color: color.withValues(alpha: 0.35), width: 2.5),
+            ),
+            title: Row(
+              children: [
+                Icon(Icons.play_circle_fill_rounded, color: color, size: 28),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'หมวด${category.titleTh}',
+                    style: const TextStyle(
+                      fontSize: 20,
+                      fontWeight: FontWeight.w900,
+                      color: Color(0xFF1E293B),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            content: Text(
+              'เล่นค้างไว้ หาเจอแล้ว ${saved.found.length} จาก ${saved.total} คำ\n'
+              'จะเล่นต่อเลยไหม ?',
+              style: const TextStyle(
+                fontSize: 15.5,
+                height: 1.5,
+                fontWeight: FontWeight.w600,
+                color: Color(0xFF334155),
+              ),
+            ),
+            actionsPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+            actions: [
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton(
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: color,
+                        side: BorderSide(color: color.withValues(alpha: 0.5), width: 2),
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                      ),
+                      onPressed: () => Navigator.pop(dialogContext, false),
+                      child: const Text(
+                        'เริ่มใหม่',
+                        style: TextStyle(fontWeight: FontWeight.w900, fontSize: 15),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: ElevatedButton(
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: color,
+                        foregroundColor: Colors.white,
+                        elevation: 0,
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                      ),
+                      onPressed: () => Navigator.pop(dialogContext, true),
+                      child: const Text(
+                        'เล่นต่อ',
+                        style: TextStyle(fontWeight: FontWeight.w900, fontSize: 15),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+    );
+  }
+
+  /// "เล่นต่อ 7/18" for an unfinished game, a green tick when finished.
+  Widget? _badge(WordSearchCategoryItem category) {
+    final unfinished = _unfinished[category.key];
+    if (unfinished != null) {
+      return Container(
+        padding: const EdgeInsets.fromLTRB(5, 3, 8, 3),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: const Color(0xFFFDE68A), width: 1.5),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.15),
+              blurRadius: 3,
+              offset: const Offset(0, 1.5),
+            ),
+          ],
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.play_arrow_rounded, size: 14, color: Color(0xFFF59E0B)),
+            const SizedBox(width: 2),
+            Text(
+              'เล่นต่อ ${unfinished.done} / ${unfinished.total}',
+              style: const TextStyle(
+                fontSize: 11,
+                fontWeight: FontWeight.w900,
+                color: Color(0xFFF59E0B),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+    if (_best.containsKey(category.key)) {
+      return Container(
+        width: 26,
+        height: 26,
+        decoration: BoxDecoration(
+          color: const Color(0xFF22C55E),
+          shape: BoxShape.circle,
+          border: Border.all(color: Colors.white, width: 2.5),
+          boxShadow: const [
+            BoxShadow(color: Colors.black26, blurRadius: 3, offset: Offset(0, 1.5)),
+          ],
+        ),
+        child: const Icon(Icons.check_rounded, size: 16, color: Colors.white),
+      );
+    }
+    return null;
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -130,7 +224,6 @@ class WordSearchScreen extends StatelessWidget {
         ),
         child: Column(
           children: [
-            // 1. แถบ Header สีส้มด้านบน (ตรึงไว้เฉพาะส่วนนี้)
             Container(
               color: topBarColor,
               child: SafeArea(
@@ -151,6 +244,8 @@ class WordSearchScreen extends StatelessWidget {
                           ),
                         ),
                       ),
+                      // Same width as the coin chip on the right, so the title stays centred.
+                      const SizedBox(width: CoinBalanceChip.width - 38),
                       const Expanded(
                         child: Text(
                           'ค้นหาคำศัพท์',
@@ -163,25 +258,22 @@ class WordSearchScreen extends StatelessWidget {
                           ),
                         ),
                       ),
-                      const SizedBox(width: 44),
+                      const CoinBalanceChip(),
                     ],
                   ),
                 ),
               ),
             ),
-
-            // 2. ส่วนเนื้อหาทั้งหมดที่เลื่อนได้ (หัวข้อเลื่อนขึ้นไปด้วย ไม่ถูกบังการ์ด)
             Expanded(
               child: CustomScrollView(
-                physics: const ClampingScrollPhysics(), // เลื่อนเรียบสนิท ชนขอบแล้วหยุด ไม่เด้ง
+                physics: const ClampingScrollPhysics(),
                 slivers: [
-                  // หัวข้อ "ค้นหาคำศัพท์แสนสนุก / เลือกหมวดหมู่" เลื่อนขึ้นไปพร้อมกับการ์ด
-                  SliverToBoxAdapter(
+                  const SliverToBoxAdapter(
                     child: Padding(
-                      padding: const EdgeInsets.fromLTRB(24, 18, 24, 14),
+                      padding: EdgeInsets.fromLTRB(24, 18, 24, 14),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
-                        children: const [
+                        children: [
                           Text(
                             'ค้นหาคำศัพท์แสนสนุก',
                             style: TextStyle(
@@ -205,8 +297,6 @@ class WordSearchScreen extends StatelessWidget {
                       ),
                     ),
                   ),
-
-                  // ตารางแสดงการ์ดหมวดหมู่ 2 คอลัมน์
                   SliverPadding(
                     padding: const EdgeInsets.fromLTRB(24, 0, 24, 28),
                     sliver: SliverGrid(
@@ -219,7 +309,11 @@ class WordSearchScreen extends StatelessWidget {
                       delegate: SliverChildBuilderDelegate(
                         (context, index) {
                           final cat = categories[index];
-                          return _CategoryFilledCard(category: cat);
+                          return _CategoryFilledCard(
+                            category: cat,
+                            badge: _badge(cat),
+                            onTap: () => _open(cat),
+                          );
                         },
                         childCount: categories.length,
                       ),
@@ -235,11 +329,16 @@ class WordSearchScreen extends StatelessWidget {
   }
 }
 
-// การ์ดหมวดหมู่ 3D Squircle
 class _CategoryFilledCard extends StatefulWidget {
   final WordSearchCategoryItem category;
+  final Widget? badge;
+  final VoidCallback onTap;
 
-  const _CategoryFilledCard({required this.category});
+  const _CategoryFilledCard({
+    required this.category,
+    required this.onTap,
+    this.badge,
+  });
 
   @override
   State<_CategoryFilledCard> createState() => _CategoryFilledCardState();
@@ -256,16 +355,7 @@ class _CategoryFilledCardState extends State<_CategoryFilledCard> {
       onTapDown: (_) => setState(() => _isPressed = true),
       onTapUp: (_) => setState(() => _isPressed = false),
       onTapCancel: () => setState(() => _isPressed = false),
-      onTap: () {
-        Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (_) => WordSearchPlayScreen(
-              category: cat,
-            ),
-          ),
-        );
-      },
+      onTap: widget.onTap,
       child: AnimatedScale(
         scale: _isPressed ? 0.93 : 1.0,
         duration: const Duration(milliseconds: 120),
@@ -280,7 +370,7 @@ class _CategoryFilledCardState extends State<_CategoryFilledCard> {
               color: cat.cardColor,
               borderRadius: BorderRadius.circular(26),
               border: Border.all(
-                color: Colors.white.withOpacity(0.35),
+                color: Colors.white.withValues(alpha: 0.35),
                 width: 1.5,
               ),
             ),
@@ -294,7 +384,7 @@ class _CategoryFilledCardState extends State<_CategoryFilledCard> {
                     height: 65,
                     decoration: BoxDecoration(
                       shape: BoxShape.circle,
-                      color: Colors.white.withOpacity(0.14),
+                      color: Colors.white.withValues(alpha: 0.14),
                     ),
                   ),
                 ),
@@ -342,6 +432,8 @@ class _CategoryFilledCardState extends State<_CategoryFilledCard> {
                     ),
                   ),
                 ),
+                if (widget.badge != null)
+                  Positioned(top: 10, right: 10, child: widget.badge!),
               ],
             ),
           ),

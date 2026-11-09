@@ -32,22 +32,34 @@ dependencies:
     sdk: flutter
 
   cupertino_icons: ^1.0.8
-  video_player: ^2.8.2
+  http: ^1.5.0
   flutter_tts: ^4.2.5
+  firebase_core: ^3.10.1
+  firebase_auth: ^5.4.1
+  cloud_firestore: ^5.6.1
   audioplayers: ^6.0.0
-  speech_to_text: ^7.4.0
+  speech_to_text: ^7.0.0
+  video_player: ^2.8.2
+  shared_preferences: ^2.5.3
   record: ^5.2.0         # ใช้บันทึกเสียงไมโครโฟน
   path_provider: ^2.1.5   # ใช้หาโฟลเดอร์สำหรับเซฟไฟล์เสียงในเครื่อง
   share_plus: ^10.1.4     # ใช้สำหรับปุ่มกดแชร์/ส่งออกไฟล์เสียงที่อัดไว้
-  shared_preferences: ^2.2.3
+  google_fonts: ^6.3.2
   flutter_local_notifications: ^17.2.3
   timezone: ^0.9.4
+  package_info_plus: ^8.3.0 # อ่านเลขเวอร์ชันจริงของแอปมาแสดง
+  crypto: ^3.0.6 # hash รหัส PIN ผู้ปกครอง
+  url_launcher: ^6.3.1 # เปิดแอปอีเมลจากหน้า "ติดต่อเรา"
 
   # The following adds the Cupertino Icons font to your application.
   # Use with the CupertinoIcons class for iOS style icons.
 
 dev_dependencies:
   flutter_test:
+    sdk: flutter
+
+  # Automated end-to-end tests on a device/emulator (see integration_test/README.md)
+  integration_test:
     sdk: flutter
 
   # The "flutter_lints" package below contains a set of recommended lints to
@@ -73,6 +85,7 @@ flutter:
     - assets/images/
     - assets/videos/
     - assets/sounds/
+    - assets/audio/karaoke/
     - assets/images/tale/
     - assets/images/guess/
     - assets/images/sentence/
@@ -95,9 +108,6 @@ flutter:
     - assets/images/vocabulary/body/
     - assets/images/vocabulary/numbers/
     - assets/images/vocabulary/places/
-    - assets/images/vocabulary/dailyroutine/
-    - assets/images/vocabulary/food/
-    - assets/images/vocabulary/house/
     - assets/images/character/
     - assets/images/shadowmatch/
     - assets/images/Background/
@@ -116,10 +126,16 @@ flutter:
     - assets/images/phonics/
     - assets/images/flashcards/
     - assets/sounds/animal/
-    - assets/images/grammer/
-    - assets/images/tenses/
+    - assets/sounds/sfx/
+    - assets/images/a_cute_pastel_cartoon_illustration_in_a_wide_roun.png
+    - assets/images/background_1.png
+    - assets/images/vocabulary/dailyroutine/
+    - assets/images/vocabulary/food/
+    - assets/images/vocabulary/house/
 
-    
+    - assets/images/phonics/
+
+
   # An image asset can refer to one or more resolution-specific "variants", see
   # https://flutter.dev/to/resolution-aware-images
 

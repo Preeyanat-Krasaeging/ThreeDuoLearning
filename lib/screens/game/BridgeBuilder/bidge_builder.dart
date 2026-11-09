@@ -2,47 +2,20 @@ import 'dart:async';
 import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 // อวาตาร์ของผู้ใช้จากหน้าโปรไฟล์ (ปรับ path ให้ตรงกับตำแหน่ง profile_screen.dart ในโปรเจกต์)
 import '../../profile_screen.dart'
     show AvatarProfile, AvatarPainter, kSkinTones, kHairColors, kMaleOutfits, kFemaleOutfits;
+import '../../../services/bridge_service.dart';
+import '../../../services/coin_balance.dart';
+import '../../../services/guess_progress_service.dart' show GuessCoinResult;
+import '../../../services/user_account_preferences.dart';
+import '../../../widgets/parent_pin_prompt.dart';
+import '../../../services/sfx.dart';
 
 final Random _rng = Random();
 T _pick<T>(List<T> l) => l[_rng.nextInt(l.length)];
-
-Future<void> main() async {
-  WidgetsFlutterBinding.ensureInitialized();
-  try {
-    await SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
-  } catch (_) {}
-  // โหลดความคืบหน้าที่บันทึกไว้ก่อนเปิดแอป (ด่านที่ปลดล็อก / ดาว / เหรียญ / สมุดสะสม)
-  await GameProgress.load();
-  runApp(const BridgeBuilderApp());
-}
-
-class BridgeBuilderApp extends StatelessWidget {
-  const BridgeBuilderApp({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'Bridge Builder Grammar',
-      debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        fontFamily: 'Mitr',
-        useMaterial3: true,
-        colorSchemeSeed: const Color(0xFF4DA3FF),
-      ),
-      // หน้าแรกของแอปคือ "หน้าเลือกด่าน" เสมอ (ไม่เข้าเกมเองอัตโนมัติ)
-      initialRoute: '/',
-      routes: {
-        '/': (_) => const LevelSelectScreen(),
-      },
-    );
-  }
-}
 
 // ==========================================
 // พาเลตสีสดใส + ปุ่มลูกกวาด (ใช้ทั้งแอป)
@@ -65,7 +38,9 @@ class _C {
   static const purpleDk = Color(0xFF6A3FE0);
   // ignore: unused_field
   static const teal = Color(0xFF3DDDE0);
+  // ignore: unused_field
   static const tealDk = Color(0xFF0FA3B1);
+  // ignore: unused_field
   static const grey = Color(0xFFC9CEDF);
   static const greyDk = Color(0xFF9097B5);
 }
@@ -134,6 +109,7 @@ class _FloatingBackdropState extends State<_FloatingBackdrop> with SingleTickerP
 class _Bounce extends StatefulWidget {
   final Widget child;
   final double height;
+  // ignore: unused_element_parameter
   const _Bounce({required this.child, this.height = 6});
 
   @override
@@ -231,6 +207,7 @@ class _CandyState extends State<_Candy> {
   }
 }
 
+// ignore: unused_element
 Widget _whitePill(String text, Color color, {double size = 14}) {
   return Container(
     padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
@@ -302,6 +279,14 @@ class QuestionBank {
     if (easy + hard > total) easy = total - hard;
     final medium = total - easy - hard;
     return [easy, medium, hard];
+  }
+
+  /// Question of a saved id (see bridgeQuestionId), or null.
+  static Question? byId(String id) {
+    for (final q in [..._easy, ..._medium, ..._hard]) {
+      if (bridgeQuestionId(q.sentence) == id) return q;
+    }
+    return null;
   }
 
   static List<Question> getQuestionsForLevel(int level, [Set<String>? seen]) {
@@ -385,7 +370,7 @@ class QuestionBank {
       options: ["He", "She", "It"],
       correctAnswer: "He",
       keyWord: "brother",
-      grammarRule: "brother คือพี่/น้องชาย ผู้ชายใช้ He นะ",
+      grammarRule: "brother คือพี่ / น้องชาย ผู้ชายใช้ He นะ",
       emoji: '👦',
       thai: "นี่คือพี่ชายของฉัน เขาตัวสูง",
     ),
@@ -403,7 +388,7 @@ class QuestionBank {
       options: ["fly", "flies", "flying"],
       correctAnswer: "flies",
       keyWord: "bird",
-      grammarRule: "นกตัวเดียว (It) กริยาต้องเติม s: fly เปลี่ยนเป็น flies นะ",
+      grammarRule: "นกตัวเดียว (It) กริยาต้องเติม s : fly เปลี่ยนเป็น flies นะ",
       emoji: '🐦',
       thai: "นกบินอยู่บนท้องฟ้า",
     ),
@@ -443,7 +428,7 @@ class QuestionBank {
     _mk("He _______ a ball.", ["have", "has", "having"], "has", "He",
         "He / She / It ใช้ has นะ", '🏀', "เขามีลูกบอลหนึ่งลูก"),
     _mk("She _______ to school every day.", ["go", "goes", "going"], "goes", "every day",
-        "She ใน Present Simple เติม es: go เป็น goes นะ", '🏫', "เธอไปโรงเรียนทุกวัน"),
+        "She ใน Present Simple เติม es : go เป็น goes นะ", '🏫', "เธอไปโรงเรียนทุกวัน"),
     _mk("I like _______ orange.", ["a", "an"], "an", "orange",
         "orange ขึ้นต้นด้วยเสียงสระ ใช้ an นะ", '🍊', "ฉันชอบส้มหนึ่งผล"),
     _mk("There is _______ egg in the box.", ["a", "an"], "an", "egg",
@@ -480,7 +465,7 @@ class QuestionBank {
     ),
     Question(
       sentence: "The cat is sleeping _______ the table.",
-      options: ["in", "under", "at", "on"],
+      options: ["in", "under", "to", "of"],
       correctAnswer: "under",
       keyWord: "table",
       grammarRule: "'under' แปลว่า 'ใต้' แมวนอนใต้โต๊ะนั่นเอง",
@@ -489,7 +474,7 @@ class QuestionBank {
     ),
     Question(
       sentence: "Birds _______ fly high in the sky.",
-      options: ["can", "can't", "is"],
+      options: ["can", "cans", "is"],
       correctAnswer: "can",
       keyWord: "fly high",
       grammarRule: "'can' บอกว่าทำได้ นกบินได้ ก็ใช้ can นะ",
@@ -578,7 +563,7 @@ class QuestionBank {
       thai: "ทอมแปรงฟันทุกเช้า",
     ),
     _mk("Look! The baby is _______.", ["cry", "cries", "crying"], "crying", "Look",
-        "is + V-ing แปลว่ากำลังทำอยู่ ใช้ crying นะ", '👶', "ดูสิ! ทารกกำลังร้องไห้"),
+        "is + V-ing แปลว่ากำลังทำอยู่ ใช้ crying นะ", '👶', "ดูสิ ! ทารกกำลังร้องไห้"),
     _mk("I will visit my grandma _______ Sunday.", ["in", "on", "at"], "on", "Sunday",
         "วันในสัปดาห์ใช้ on เช่น on Sunday, on Monday นะ", '👵', "ฉันจะไปเยี่ยมคุณยายวันอาทิตย์"),
     _mk("She goes to bed _______ 9 o'clock.", ["in", "on", "at"], "at", "9 o'clock",
@@ -631,7 +616,7 @@ class QuestionBank {
       options: ["barks / sing", "bark / sings", "barks / sings", "barking / sing"],
       correctAnswer: "barks / sing",
       keyWord: "birds",
-      grammarRule: "The dog ตัวเดียวเติม s: barks ส่วน the birds หลายตัวไม่เติม s: sing นะ",
+      grammarRule: "The dog ตัวเดียวเติม s : barks ส่วน the birds หลายตัวไม่เติม s : sing นะ",
       emoji: '🐶',
       thai: "สุนัขเห่า และนกร้องเพลง",
     ),
@@ -640,7 +625,7 @@ class QuestionBank {
       options: ["went / saw", "go / see", "went / see", "goed / saw"],
       correctAnswer: "went / saw",
       keyWord: "Yesterday",
-      grammarRule: "Yesterday คืออดีต: go เปลี่ยนเป็น went และ see เปลี่ยนเป็น saw นะ",
+      grammarRule: "Yesterday คืออดีต : go เปลี่ยนเป็น went และ see เปลี่ยนเป็น saw นะ",
       emoji: '🦁',
       thai: "เมื่อวานฉันไปสวนสัตว์และเห็นสิงโต",
     ),
@@ -667,7 +652,7 @@ class QuestionBank {
       options: ["reads / plays", "read / plays", "reads / play", "reading / plays"],
       correctAnswer: "reads / plays",
       keyWord: "and",
-      grammarRule: "She และ he ตัวเดียว กริยาต้องเติม s: reads, plays นะ",
+      grammarRule: "She และ he ตัวเดียว กริยาต้องเติม s : reads, plays นะ",
       emoji: '🎮',
       thai: "เธออ่านหนังสือและเขาเล่นเกม",
     ),
@@ -685,7 +670,7 @@ class QuestionBank {
       options: ["caught / ate", "catch / eat", "caught / eat", "catched / ate"],
       correctAnswer: "caught / ate",
       keyWord: "Last week",
-      grammarRule: "Last week คืออดีต: catch เปลี่ยนเป็น caught, eat เปลี่ยนเป็น ate (กริยาไม่ปกติ) นะ",
+      grammarRule: "Last week คืออดีต : catch เปลี่ยนเป็น caught, eat เปลี่ยนเป็น ate (กริยาไม่ปกติ) นะ",
       emoji: '🎣',
       thai: "สัปดาห์ที่แล้วทอมจับปลาได้และกินมัน",
     ),
@@ -694,7 +679,7 @@ class QuestionBank {
       options: ["play / sleeps", "plays / sleeps", "play / sleep", "playing / sleeps"],
       correctAnswer: "play / sleeps",
       keyWord: "kids",
-      grammarRule: "the kids (หลายคน) ไม่เติม s: play ส่วน the cat (ตัวเดียว) เติม s: sleeps นะ",
+      grammarRule: "the kids (หลายคน) ไม่เติม s : play ส่วน the cat (ตัวเดียว) เติม s : sleeps นะ",
       emoji: '🌳',
       thai: "เด็กๆ เล่นในสวน และแมวนอนอยู่ใต้ต้นไม้",
     ),
@@ -717,9 +702,9 @@ class QuestionBank {
       thai: "ตอนนี้พี่สาวฉันกำลังเต้น แต่ฉันกำลังร้องเพลง",
     ),
     _mk("She _______ a song and they _______ dancing.", ["sings / are", "sing / is", "sings / is", "singing / are"], "sings / are", "and",
-        "She เติม s: sings ส่วน They ใช้ are นะ", '🎤', "เธอร้องเพลงและพวกเขากำลังเต้น"),
+        "She เติม s : sings ส่วน They ใช้ are นะ", '🎤', "เธอร้องเพลงและพวกเขากำลังเต้น"),
     _mk("Yesterday he _______ a cake and _______ it.", ["made / ate", "make / eat", "made / eat", "maked / ate"], "made / ate", "Yesterday",
-        "อดีต: make เป็น made และ eat เป็น ate (กริยาไม่ปกติ) นะ", '🎂', "เมื่อวานเขาทำเค้กและกินมัน"),
+        "อดีต : make เป็น made และ eat เป็น ate (กริยาไม่ปกติ) นะ", '🎂', "เมื่อวานเขาทำเค้กและกินมัน"),
     _mk("If you _______ hard, you _______ pass the test.", ["study / will", "studied / will", "study / would", "studying / will"], "study / will", "If",
         "If + Present Simple (study) ตามด้วย will + กริยาช่อง 1 นะ", '📝', "ถ้าเธอตั้งใจเรียน เธอจะสอบผ่าน"),
     _mk("I _______ playing now, but yesterday I _______ reading.", ["am / was", "is / was", "am / is", "are / were"], "am / was", "but",
@@ -727,15 +712,15 @@ class QuestionBank {
     _mk("My parents _______ at home and my brother _______ at school.", ["are / is", "is / are", "are / are", "am / is"], "are / is", "and",
         "parents หลายคนใช้ are ส่วน brother คนเดียวใช้ is นะ", '🏡', "พ่อแม่อยู่บ้านและพี่ชายอยู่โรงเรียน"),
     _mk("Last night, I _______ dinner and then _______ TV.", ["ate / watched", "eat / watch", "ate / watch", "eated / watched"], "ate / watched", "Last night",
-        "Last night คืออดีต: ate (eat) และ watched นะ", '🍽️', "เมื่อคืนฉันกินข้าวเย็นแล้วดูทีวี"),
+        "Last night คืออดีต : ate (eat) และ watched นะ", '🍽️', "เมื่อคืนฉันกินข้าวเย็นแล้วดูทีวี"),
     _mk("She _______ a doctor, and her sons _______ students.", ["is / are", "are / is", "is / is", "am / are"], "is / are", "and",
         "She ใช้ is ส่วน sons หลายคนใช้ are นะ", '🩺', "เธอเป็นหมอ และลูกชายของเธอเป็นนักเรียน"),
-    _mk("He _______ swim, but he _______ fly.", ["can / can't", "can't / can", "can / can", "must / can't"], "can / can't", "but",
+    _mk("He _______ swim, but he _______ fly.", ["can / can't", "can't / can", "can / can", "cans / can't"], "can / can't", "but",
         "can ทำได้ can't ทำไม่ได้ คนบินไม่ได้นะ", '🏊', "เขาว่ายน้ำได้ แต่บินไม่ได้"),
     _mk("Every day, she _______ up at six and _______ breakfast.", ["wakes / eats", "wake / eat", "wakes / eat", "waking / eats"], "wakes / eats", "Every day",
-        "She ใน Present Simple กริยาต้องเติม s: wakes, eats นะ", '🌅', "ทุกวันเธอตื่นหกโมงและกินอาหารเช้า"),
+        "She ใน Present Simple กริยาต้องเติม s : wakes, eats นะ", '🌅', "ทุกวันเธอตื่นหกโมงและกินอาหารเช้า"),
     _mk("We _______ to the beach last Sunday and _______ shells.", ["went / found", "go / find", "went / find", "goed / found"], "went / found", "last Sunday",
-        "last Sunday คืออดีต: go เป็น went, find เป็น found นะ", '🏖️', "วันอาทิตย์ที่แล้วพวกเราไปทะเลและเจอเปลือกหอย"),
+        "last Sunday คืออดีต : go เป็น went, find เป็น found นะ", '🏖️', "วันอาทิตย์ที่แล้วพวกเราไปทะเลและเจอเปลือกหอย"),
   ];
 }
 
@@ -794,9 +779,10 @@ class _BurstFxState extends State<_BurstFx> with SingleTickerProviderStateMixin 
                 top: 70 + sin(ang) * r - 10 - 16 * t,
                 child: Opacity(
                   opacity: (1 - t).clamp(0.0, 1.0),
-                  child: Text(
-                    widget.emojis.isEmpty ? '✨' : widget.emojis[i % widget.emojis.length],
-                    style: TextStyle(fontSize: 14 + 12 * (1 - t)),
+                  child: Icon(
+                    Icons.star_rounded,
+                    size: 14 + 12 * (1 - t),
+                    color: const [Color(0xFFFFC21A), Color(0xFFFF5FA2), Color(0xFF3DB4FF), Color(0xFF4CEB8B)][i % 4],
                   ),
                 ),
               );
@@ -858,10 +844,6 @@ class _FallingPlankState extends State<_FallingPlank> with SingleTickerProviderS
                     ),
                   ),
                 ),
-                if (t < 0.25)
-                  const Positioned(top: -14, left: 2, child: Text('💥', style: TextStyle(fontSize: 20))),
-                if (f > 0.8)
-                  const Positioned(top: -8, left: 0, child: Text('💦', style: TextStyle(fontSize: 22))),
               ],
             ),
           ),
@@ -876,8 +858,8 @@ class _ConfettiPiece {
   final double delay;
   final double size;
   final double sway;
-  final String emoji;
-  _ConfettiPiece(this.x, this.delay, this.size, this.sway, this.emoji);
+  final Color color;
+  _ConfettiPiece(this.x, this.delay, this.size, this.sway, this.color);
 }
 
 class _ConfettiRain extends StatefulWidget {
@@ -889,7 +871,7 @@ class _ConfettiRain extends StatefulWidget {
 }
 
 class _ConfettiRainState extends State<_ConfettiRain> with SingleTickerProviderStateMixin {
-  static const _items = ['🎉', '🎊', '⭐', '✨', '🌟', '🎈', '💖', '🍭'];
+  static const _items = [Color(0xFFFFC21A), Color(0xFFFF5FA2), Color(0xFF3DB4FF), Color(0xFF4CEB8B), Color(0xFFA37BFF), Color(0xFFFF8A00)];
 
   late final List<_ConfettiPiece> _pieces = List.generate(
     32,
@@ -932,7 +914,17 @@ class _ConfettiRainState extends State<_ConfettiRain> with SingleTickerProviderS
               kids.add(Positioned(
                 left: p.x * (box.maxWidth - 30) + sin(t * pi * 4 + p.x * 9) * p.sway,
                 top: -40 + (box.maxHeight + 60) * t,
-                child: Opacity(opacity: op, child: Text(p.emoji, style: TextStyle(fontSize: p.size))),
+                child: Opacity(
+                  opacity: op,
+                  child: Transform.rotate(
+                    angle: t * pi * 4 + p.x * 6,
+                    child: Container(
+                      width: p.size * 0.55,
+                      height: p.size * 0.3,
+                      decoration: BoxDecoration(color: p.color, borderRadius: BorderRadius.circular(2)),
+                    ),
+                  ),
+                ),
               ));
             }
             return Stack(children: kids);
@@ -1083,10 +1075,10 @@ class _ScenePainter extends CustomPainter {
         ? const Color(0xFF00D5F0)
         : tier == 1
             ? const Color(0xFFFFB300)
-            : const Color(0xFFFF7BAC);
+            : const Color(0xFFC79A5B);
     final post = Paint()
       ..color = const Color(0xFF8D5A3B)
-      ..strokeWidth = 5
+      ..strokeWidth = 8
       ..strokeCap = StrokeCap.round;
     final rope = Paint()
       ..color = ropeColor
@@ -1100,6 +1092,16 @@ class _ScenePainter extends CustomPainter {
       ..moveTo(g.bridgeLeft, top)
       ..quadraticBezierTo((g.bridgeLeft + g.bridgeRight) / 2, top + 22, g.bridgeRight, top);
     canvas.drawPath(ropePath, rope);
+    canvas.drawPath(
+      Path()
+        ..moveTo(g.bridgeLeft, top + 14)
+        ..quadraticBezierTo((g.bridgeLeft + g.bridgeRight) / 2, top + 36, g.bridgeRight, top + 14),
+      Paint()
+        ..color = ropeColor.withAlpha(210)
+        ..strokeWidth = 2.5
+        ..style = PaintingStyle.stroke
+        ..strokeCap = StrokeCap.round,
+    );
     final hanger = Paint()
       ..color = ropeColor.withAlpha(180)
       ..strokeWidth = 1.5;
@@ -1108,6 +1110,26 @@ class _ScenePainter extends CustomPainter {
       final yCurve = top + 44 * u * (1 - u);
       canvas.drawLine(Offset(g.slotCenter(i), yCurve), Offset(g.slotCenter(i), g.deckY + wobble), hanger);
     }
+
+    // ใบไม้ด้านหน้ามุมซ้าย-ขวา
+    void leaf(Offset base, double len, double ang, Color col) {
+      canvas.save();
+      canvas.translate(base.dx, base.dy);
+      canvas.rotate(ang);
+      canvas.drawPath(
+        Path()
+          ..moveTo(0, 0)
+          ..quadraticBezierTo(len * 0.35, -len * 0.28, len, 0)
+          ..quadraticBezierTo(len * 0.35, len * 0.28, 0, 0),
+        Paint()..color = col,
+      );
+      canvas.restore();
+    }
+
+    leaf(Offset(8, h), h * 0.3, -1.2, th.accent);
+    leaf(Offset(22, h), h * 0.24, -0.6, th.accentDk);
+    leaf(Offset(w - 8, h), h * 0.3, -pi + 1.2, th.accent);
+    leaf(Offset(w - 22, h), h * 0.24, -pi + 0.6, th.accentDk);
   }
 
   @override
@@ -1118,8 +1140,6 @@ class _ScenePainter extends CustomPainter {
 // ตั้งค่า + ความคืบหน้าของผู้เล่น
 // ==========================================
 class GameSettings {
-  static bool sound = true;
-  static bool music = true;
   static bool voice = true; // เสียงอ่านคำ/ประโยค (TTS)
 }
 
@@ -1162,74 +1182,6 @@ class VoiceHub {
   }
 }
 
-class AudioHub {
-  static final List<AudioPlayer> _pool = List.generate(6, (_) => AudioPlayer());
-  static int _i = 0;
-  static final AudioPlayer _bgm = AudioPlayer();
-  static String? _bgmName;
-  static String? _playing;
-
-  static Future<void> sfx(String name, {double volume = 1.0}) async {
-    if (!GameSettings.sound) return;
-    try {
-      final pl = _pool[_i];
-      _i = (_i + 1) % _pool.length;
-      await pl.stop();
-      await pl.setVolume(volume);
-      await pl.play(AssetSource('sounds/$name'));
-    } catch (_) {}
-  }
-
-  static Future<void> playBgm(String name) async {
-    _bgmName = name;
-    if (!GameSettings.music) {
-      await stopBgm();
-      return;
-    }
-    if (_playing == name) return;
-    try {
-      _playing = name;
-      await _bgm.stop();
-      await _bgm.setReleaseMode(ReleaseMode.loop);
-      await _bgm.setVolume(0.3);
-      await _bgm.play(AssetSource('sounds/$name'));
-    } catch (_) {
-      _playing = null;
-    }
-  }
-
-  static Future<void> stopBgm() async {
-    _playing = null;
-    try {
-      await _bgm.stop();
-    } catch (_) {}
-  }
-
-  static Future<void> refreshBgm() async {
-    final n = _bgmName;
-    if (n != null) await playBgm(n);
-  }
-
-  static Future<void> duck(bool on) async {
-    try {
-      await _bgm.setVolume(on ? 0.1 : 0.3);
-    } catch (_) {}
-  }
-
-  static Future<void> pauseBgm() async {
-    try {
-      await _bgm.pause();
-    } catch (_) {}
-  }
-
-  static Future<void> resumeBgm() async {
-    if (!GameSettings.music || _playing == null) return;
-    try {
-      await _bgm.resume();
-    } catch (_) {}
-  }
-}
-
 class GameProgress {
   static const int totalLevels = 50;
   static const int levelsPerWorld = 10;
@@ -1249,6 +1201,9 @@ class GameProgress {
 
   static final Map<int, int> stars = {};
   static final Set<int> collection = {};
+  static int hints = 3; // ตัวช่วยใบ้ (เก็บไว้ข้ามด่าน)
+  static int nets = 2; // ตาข่ายนิรภัย (เก็บไว้ข้ามด่าน)
+  static Set<int> unfinished = {}; // ด่านที่เล่นค้างไว้ (ป้าย "ต่อ")
 
   static bool isUnlocked(int level) => level <= 1 || stars.containsKey(level - 1);
   static int get totalStars => stars.values.fold(0, (a, b) => a + b);
@@ -1268,48 +1223,110 @@ class GameProgress {
   static void reset() {
     stars.clear();
     collection.clear();
+    hints = 3;
+    nets = 2;
     save();
   }
 
-  // ---------- บันทึก / โหลดความคืบหน้า ----------
+  // ---------- บันทึก / โหลด: แยกตามบัญชี เก็บในเครื่องและบนเซิร์ฟเวอร์ ----------
+  static Map<String, dynamic> _toJson() => {
+        'stars': [for (int l = 1; l <= totalLevels; l++) (stars[l] ?? 0).clamp(0, 3).toInt()],
+        'stickers': collection.where((i) => i >= 0 && i < stickers.length).toList()..sort(),
+        'hints': hints.clamp(0, 999).toInt(),
+        'nets': nets.clamp(0, 999).toInt(),
+      };
+
+  static void _apply(Map d) {
+    final s = d['stars'];
+    stars.clear();
+    if (s is List) {
+      for (int i = 0; i < totalLevels && i < s.length; i++) {
+        final v = s[i];
+        if (v is int && v > 0) stars[i + 1] = v.clamp(1, 3).toInt();
+      }
+    }
+    collection.clear();
+    final c = d['stickers'];
+    if (c is List) {
+      for (final i in c) {
+        if (i is int && i >= 0 && i < stickers.length) collection.add(i);
+      }
+    }
+    if (d['hints'] is int) hints = (d['hints'] as int).clamp(0, 999).toInt();
+    if (d['nets'] is int) nets = (d['nets'] as int).clamp(0, 999).toInt();
+  }
+
   static Future<void> save() async {
     try {
       final p = await SharedPreferences.getInstance();
-      await p.setString('stars', stars.entries.map((e) => '${e.key}:${e.value}').join(','));
-      await p.setString('collection', collection.join(','));
-      await p.setBool('sound', GameSettings.sound);
-      await p.setBool('music', GameSettings.music);
-      await p.setBool('voice', GameSettings.voice);
+      await p.setBool('bridge_voice', GameSettings.voice);
     } catch (_) {}
+    await BridgeStateSync.save(_toJson());
   }
 
-  static bool _loaded = false;
-  static Future<void> ensureLoaded() async {
-    if (!_loaded) await load();
-  }
+  /// โหลดของบัญชีที่ล็อกอินอยู่ (เรียกทุกครั้งที่เปิดหน้าเลือกด่าน)
+  static Future<void> ensureLoaded() => load();
 
   static Future<void> load() async {
-    _loaded = true;
+    stars.clear();
+    collection.clear();
+    hints = 3;
+    nets = 2;
+    unfinished = {};
+    if (CoinBalance.value.value == null) CoinBalance.refresh();
     try {
       final p = await SharedPreferences.getInstance();
-      stars.clear();
-      for (final part in (p.getString('stars') ?? '').split(',')) {
-        final kv = part.split(':');
-        if (kv.length != 2) continue;
-        final k = int.tryParse(kv[0]);
-        final v = int.tryParse(kv[1]);
-        if (k == null || v == null || k < 1 || k > totalLevels) continue;
-        stars[k] = v.clamp(0, 3).toInt();
+      GameSettings.voice = p.getBool('bridge_voice') ?? p.getBool('voice') ?? true;
+      final local = await BridgeStateSync.loadLocal();
+      if (local != null) {
+        _apply(local);
+      } else if (await _claimOldProgress(p)) {
+        await BridgeStateSync.save(_toJson());
       }
-      collection.clear();
-      for (final part in (p.getString('collection') ?? '').split(',')) {
-        final i = int.tryParse(part);
-        if (i != null && i >= 0 && i < stickers.length) collection.add(i);
+      final server = await BridgeStateSync.pull().timeout(const Duration(seconds: 4), onTimeout: () => null);
+      if (server != null) _apply(server);
+      await BridgeResume.sync().timeout(const Duration(seconds: 4), onTimeout: () {});
+      final result = <int>{};
+      for (int l = 1; l <= totalLevels; l++) {
+        if (await BridgeResume.load(l) != null) result.add(l);
       }
-      GameSettings.sound = p.getBool('sound') ?? true;
-      GameSettings.music = p.getBool('music') ?? true;
-      GameSettings.voice = p.getBool('voice') ?? true;
+      unfinished = result;
     } catch (_) {}
+  }
+
+  /// ความคืบหน้าจากเวอร์ชันเก่า (เก็บในเครื่องแบบไม่แยกบัญชี: 'stars', 'collection')
+  /// ย้ายเข้าบัญชีแรกที่เปิดเกมในเครื่องนี้
+  static Future<bool> _claimOldProgress(SharedPreferences p) async {
+    final userId = await UserAccountPreferences.currentUserId();
+    if (userId == null) return false;
+    final doneKey = UserAccountPreferences.keyFor('bridge_old_checked', userId);
+    if (p.getBool(doneKey) ?? false) return false;
+    await p.setBool(doneKey, true);
+    final oldStars = p.getString('stars');
+    final oldCollection = p.getString('collection');
+    if ((oldStars == null || oldStars.isEmpty) && (oldCollection == null || oldCollection.isEmpty)) return false;
+    if (!await UserAccountPreferences.claimLegacyData('bridge_old_owner', userId)) return false;
+    for (final part in (oldStars ?? '').split(',')) {
+      final kv = part.split(':');
+      if (kv.length != 2) continue;
+      final k = int.tryParse(kv[0]);
+      final v = int.tryParse(kv[1]);
+      if (k == null || v == null || k < 1 || k > totalLevels) continue;
+      stars[k] = v.clamp(1, 3).toInt();
+    }
+    for (final part in (oldCollection ?? '').split(',')) {
+      final i = int.tryParse(part);
+      if (i != null && i >= 0 && i < stickers.length) collection.add(i);
+    }
+    return true;
+  }
+
+  static void markUnfinished(int level, bool on) {
+    if (on) {
+      unfinished.add(level);
+    } else {
+      unfinished.remove(level);
+    }
   }
 
   /// โลกที่ 0-4 (โลกละ 10 ด่าน)
@@ -1329,13 +1346,15 @@ class LevelSelectScreen extends StatefulWidget {
   State<LevelSelectScreen> createState() => _LevelSelectScreenState();
 }
 
-class _LevelSelectScreenState extends State<LevelSelectScreen> with WidgetsBindingObserver {
+class _LevelSelectScreenState extends State<LevelSelectScreen> {
+  bool _loaded = false;
+  bool _opening = false; // a level is being opened (no double taps)
   late int _selected = GameProgress.nextLevel;
 
   // ---- ค่าของแผนที่ทางยาว (ด่าน 1 อยู่ล่างสุด เลื่อนขึ้นไปหาด่าน 50) ----
   static const double _step = 104.0;
-  static const double _topPad = 110.0;
-  static const double _botPad = 130.0;
+  static const double _topPad = 170.0;
+  static const double _botPad = 190.0;
   static const double _mapH = _topPad + (GameProgress.totalLevels - 1) * _step + _botPad;
   static double _yOf(int l) => _mapH - _botPad - (l - 1) * _step;
   static Offset _pt(int l, double w) => Offset(w / 2 + sin((l - 1) * 0.9) * w * 0.27, _yOf(l));
@@ -1362,13 +1381,15 @@ class _LevelSelectScreenState extends State<LevelSelectScreen> with WidgetsBindi
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addObserver(this);
     AvatarProfile.instance.load(); // โหลดอวาตาร์เพื่อแสดงบนแผนที่
-    AudioHub.playBgm('bgm_menu.wav');
     _scrollAfterFrame();
+    // ข้อมูลของบัญชีที่ล็อกอินอยู่ (ในเครื่อง + เซิร์ฟเวอร์)
     GameProgress.ensureLoaded().then((_) {
       if (mounted) {
-        setState(() => _selected = GameProgress.nextLevel);
+        setState(() {
+          _loaded = true;
+          _selected = GameProgress.nextLevel;
+        });
         _scrollAfterFrame(animate: true);
       }
     });
@@ -1376,33 +1397,65 @@ class _LevelSelectScreenState extends State<LevelSelectScreen> with WidgetsBindi
 
   @override
   void dispose() {
-    WidgetsBinding.instance.removeObserver(this);
     _scroll.dispose();
     super.dispose();
   }
 
-  @override
-  void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) {
-      AudioHub.resumeBgm();
-    } else if (state == AppLifecycleState.paused) {
-      AudioHub.pauseBgm();
-    }
-  }
-
+  // ignore: unused_element
   int get _world => GameProgress.stageOf(_selected);
 
   Future<void> _play() async {
-    AudioHub.sfx('select.mp3');
-    final before = GameProgress.stars.length;
-    await Navigator.of(context).push(
-      MaterialPageRoute(builder: (_) => GrammarBridgeGame(startLevel: _selected)),
-    );
+    if (_opening || !_loaded) return;
+    _opening = true;
+    try {
+      final level = _selected;
+      BridgeRound? resume = await BridgeResume.load(level);
+      if (resume != null) {
+        if (!mounted) return;
+        final bool? goOn = await _askResume(level, resume);
+        if (goOn == null) return;
+        if (!goOn) {
+          await BridgeResume.clear(level);
+          GameProgress.markUnfinished(level, false);
+          resume = null;
+        }
+      }
+      if (!mounted) return;
+      final BridgeRound? start = resume;
+      await Navigator.of(context).push(
+        MaterialPageRoute(builder: (_) => GrammarBridgeGame(startLevel: level, resume: start)),
+      );
+    } finally {
+      _opening = false;
+    }
     if (!mounted) return;
-    AudioHub.playBgm('bgm_menu.wav');
-    if (GameProgress.stars.length > before) AudioHub.sfx('unlock.mp3');
     setState(() => _selected = GameProgress.nextLevel);
     _scrollAfterFrame(animate: true);
+  }
+
+  /// "ด่าน 7 เล่นค้างไว้ … เล่นต่อ / เริ่มใหม่": true = go on, false = start again.
+  Future<bool?> _askResume(int level, BridgeRound r) {
+    return showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: Colors.white,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+        title: Text('ด่าน $level เล่นค้างไว้',
+            textAlign: TextAlign.center, style: const TextStyle(fontWeight: FontWeight.w900, color: _C.blueDk)),
+        content: Text(
+          'สร้างสะพานไปแล้ว ${r.index} / ${r.questions.length} แผ่น หัวใจเหลือ ${r.hp} ดวง\nจะเล่นต่อเลยไหม ?',
+          textAlign: TextAlign.center,
+        ),
+        actionsAlignment: MainAxisAlignment.center,
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('เริ่มใหม่')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('เล่นต่อ', style: TextStyle(fontWeight: FontWeight.w900, color: _C.greenDk)),
+          ),
+        ],
+      ),
+    );
   }
 
   void _back() {
@@ -1412,8 +1465,8 @@ class _LevelSelectScreenState extends State<LevelSelectScreen> with WidgetsBindi
       showDialog(
         context: context,
         builder: (ctx) => AlertDialog(
-          title: const Text('ออกจากแอป?'),
-          content: const Text('คุณต้องการออกจากเกมใช่หรือไม่?'),
+          title: const Text('ออกจากแอป ?'),
+          content: const Text('คุณต้องการออกจากเกมใช่หรือไม่ ?'),
           actions: [
             TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('ยกเลิก')),
             TextButton(
@@ -1439,27 +1492,33 @@ class _LevelSelectScreenState extends State<LevelSelectScreen> with WidgetsBindi
     final Color b;
     final Color edge;
     if (!unlocked) {
-      a = const Color(0xFFD9DDEB);
-      b = _C.grey;
-      edge = _C.greyDk;
+      a = const Color(0xFFE6E8EF);
+      b = const Color(0xFF9FA4B2);
+      edge = const Color(0xFF6F7482);
     } else if (sel) {
-      a = _C.green;
-      b = const Color(0xFF2DCB7F);
-      edge = _C.greenDk;
+      a = const Color(0xFF45E596);
+      b = const Color(0xFF12A863);
+      edge = const Color(0xFF0B7A47);
     } else if (got > 0) {
-      a = _C.yellow;
-      b = _C.orange;
-      edge = _C.orangeDk;
+      if (level.isOdd) {
+        a = const Color(0xFFFFE04F);
+        b = const Color(0xFFF5A300);
+        edge = const Color(0xFFB87400);
+      } else {
+        a = const Color(0xFFFFC24A);
+        b = const Color(0xFFF0870E);
+        edge = const Color(0xFFB05A00);
+      }
     } else {
       a = th.accent.withAlpha(235);
       b = th.accent;
       edge = th.accentDk;
     }
     return Positioned(
-      left: cx - 34,
-      top: cy - 28,
+      left: cx - 36,
+      top: cy - 32,
       width: 72,
-      height: 100,
+      height: 104,
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
         onTap: () {
@@ -1467,11 +1526,9 @@ class _LevelSelectScreenState extends State<LevelSelectScreen> with WidgetsBindi
             if (level == _selected) {
               _play();
             } else {
-              AudioHub.sfx('click.mp3');
               setState(() => _selected = level);
             }
           } else {
-            AudioHub.sfx('locked.mp3');
             HapticFeedback.lightImpact();
           }
         },
@@ -1484,45 +1541,85 @@ class _LevelSelectScreenState extends State<LevelSelectScreen> with WidgetsBindi
                 clipBehavior: Clip.none,
                 children: [
                   Container(
-                    width: 60,
-                    height: 60,
+                    width: 64,
+                    height: 64,
                     alignment: Alignment.center,
-                    decoration: _candy(a, b, edge, r: 30).copyWith(
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      gradient: LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter, colors: [a, b]),
+                      border: Border.all(color: Color.lerp(Colors.white, b, 0.25)!, width: 3.5),
                       boxShadow: [
                         BoxShadow(color: edge, offset: const Offset(0, 5)),
-                        if (sel) const BoxShadow(color: Color(0xAAFFFFFF), blurRadius: 16, spreadRadius: 5),
+                        const BoxShadow(color: Color(0x33000000), blurRadius: 8, offset: Offset(0, 8)),
+                        if (sel) const BoxShadow(color: Color(0x88FFFFFF), blurRadius: 16, spreadRadius: 4),
                       ],
                     ),
                     child: unlocked
                         ? Text('$level',
                             style: const TextStyle(
-                              fontSize: 26,
+                              fontSize: 30,
                               fontWeight: FontWeight.w900,
                               color: Colors.white,
-                              shadows: [Shadow(color: Color(0x66000000), offset: Offset(0, 2), blurRadius: 2)],
+                              shadows: [Shadow(color: Color(0x66000000), offset: Offset(0, 2), blurRadius: 3)],
                             ))
-                        : Column(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              const Icon(Icons.lock_rounded, color: Colors.white, size: 18),
-                              Text('$level',
-                                  style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w900, color: Colors.white)),
-                            ],
-                          ),
+                        : const Icon(Icons.lock_rounded, color: Color(0xFF8A6A3A), size: 32),
                   ),
+                  // แถบเงาสะท้อนด้านบน
+                  Positioned(
+                    top: 5,
+                    left: 15,
+                    right: 15,
+                    height: 12,
+                    child: IgnorePointer(
+                      child: DecoratedBox(
+                        decoration: BoxDecoration(
+                          color: Colors.white.withAlpha(unlocked ? 80 : 110),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                      ),
+                    ),
+                  ),
+                  if (unlocked && GameProgress.unfinished.contains(level))
+                    Positioned(
+                      top: -10,
+                      left: -8,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                        decoration: BoxDecoration(
+                          color: _C.orangeDk,
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: Colors.white, width: 1.5),
+                        ),
+                        child: const Text('▶ ต่อ',
+                            style: TextStyle(fontSize: 9, fontWeight: FontWeight.w900, color: Colors.white)),
+                      ),
+                    ),
                   if (level % GameProgress.levelsPerWorld == 0)
-                    const Positioned(top: -12, right: -8, child: Text('🏁', style: TextStyle(fontSize: 20))),
+                    Positioned(
+                      top: -8,
+                      right: -8,
+                      child: Container(
+                        width: 26,
+                        height: 26,
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFE53950),
+                          shape: BoxShape.circle,
+                          border: Border.all(color: Colors.white, width: 2),
+                        ),
+                        child: const Icon(Icons.flag_rounded, color: Colors.white, size: 15),
+                      ),
+                    ),
                 ],
               ),
             ),
-            const SizedBox(height: 8),
+            const SizedBox(height: 9),
             if (unlocked)
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
                 decoration: BoxDecoration(
-                  color: Colors.white,
+                  color: const Color(0xFFFFF8E6),
                   borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: const Color(0xFFFFE08A), width: 1.5),
+                  border: Border.all(color: const Color(0xFFE8C77A), width: 1.5),
                 ),
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
@@ -1530,8 +1627,8 @@ class _LevelSelectScreenState extends State<LevelSelectScreen> with WidgetsBindi
                     3,
                     (i) => Icon(
                       Icons.star_rounded,
-                      size: 14,
-                      color: i < got ? const Color(0xFFFFB800) : const Color(0xFFE3E6F2),
+                      size: 15,
+                      color: i < got ? const Color(0xFFFFB800) : const Color(0xFFB9B9B9),
                     ),
                   ),
                 ),
@@ -1563,7 +1660,7 @@ class _LevelSelectScreenState extends State<LevelSelectScreen> with WidgetsBindi
               border: Border.all(color: Colors.white, width: 3),
               boxShadow: const [BoxShadow(color: Color(0x33000000), blurRadius: 6, offset: Offset(0, 3))],
             ),
-            child: Text('${th.icon} โลก ${k + 1}: ${th.name}  $done/${GameProgress.levelsPerWorld}',
+            child: Text('โลก ${k + 1} : ${th.name}  $done / ${GameProgress.levelsPerWorld}',
                 style: const TextStyle(
                   fontSize: 14,
                   fontWeight: FontWeight.w900,
@@ -1576,7 +1673,7 @@ class _LevelSelectScreenState extends State<LevelSelectScreen> with WidgetsBindi
     );
   }
 
-  /// แผนที่ทางยาวคดเคี้ยว เลื่อนขึ้น-ลงได้ (ด่าน 1 อยู่ล่างสุด)
+  /// แผนที่ทางยาวคดเคี้ยว เลื่อนขึ้น-ลงได้ (ด่าน 1 อยู่ล่างสุด) เต็มพื้นที่หน้าจอ
   Widget _buildMap() {
     final worlds = GameProgress.worldCount;
     final per = GameProgress.levelsPerWorld;
@@ -1586,100 +1683,73 @@ class _LevelSelectScreenState extends State<LevelSelectScreen> with WidgetsBindi
       return (_yOf(per * k) + _yOf(per * k + 1)) / 2;
     }
 
-    return Container(
-      margin: const EdgeInsets.only(top: 6),
-      child: ClipRRect(
-        borderRadius: const BorderRadius.vertical(top: Radius.circular(36)),
-        child: LayoutBuilder(
-          builder: (context, c) {
-            _viewH = c.maxHeight;
-            final w = c.maxWidth;
-            final pts = [for (int l = 1; l <= GameProgress.totalLevels; l++) _pt(l, w)];
-            final kids = <Widget>[];
+    return LayoutBuilder(
+      builder: (context, c) {
+        _viewH = c.maxHeight;
+        final w = c.maxWidth;
+        final pts = [for (int l = 1; l <= GameProgress.totalLevels; l++) _pt(l, w)];
+        final kids = <Widget>[];
+        final tops = <double>[];
+        final hs = <double>[];
 
-            for (int k = 0; k < worlds; k++) {
-              final th = _GrammarBridgeGameState._themes[k];
-              final top = bnd(k + 1);
-              final h = bnd(k) - top;
-              kids.add(Positioned(
-                left: 0,
-                right: 0,
-                top: top,
-                height: h,
-                child: DecoratedBox(
-                  decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      begin: Alignment.topCenter,
-                      end: Alignment.bottomCenter,
-                      colors: [th.skyTop, th.skyBottom],
-                    ),
-                  ),
+        for (int k = 0; k < worlds; k++) {
+          final th = _GrammarBridgeGameState._themes[k];
+          final top = bnd(k + 1);
+          final h = bnd(k) - top;
+          tops.add(top);
+          hs.add(h);
+          kids.add(Positioned(
+            left: 0,
+            right: 0,
+            top: top,
+            height: h,
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: [th.skyTop, th.skyBottom],
                 ),
-              ));
-              final emojis = [th.deco, th.floater, th.bird, th.sun];
-              for (int j = 0; j < 7; j++) {
-                kids.add(Positioned(
-                  top: top + (j + 0.5) * h / 7 - 15,
-                  left: j.isEven ? 4 : null,
-                  right: j.isEven ? null : 4,
-                  child: IgnorePointer(
-                    child: Opacity(
-                      opacity: 0.85,
-                      child: Text(emojis[j % emojis.length], style: TextStyle(fontSize: 36.0 + (j % 3) * 6)),
-                    ),
-                  ),
-                ));
-              }
-            }
+              ),
+            ),
+          ));
+        }
 
-            // แถบเมฆคั่นระหว่างโลก ช่วยให้ฉากต่อกันนุ่มนวล
-            for (int k = 1; k < worlds; k++) {
-              kids.add(Positioned(
-                left: 0,
-                right: 0,
-                top: bnd(k) - 26,
-                child: IgnorePointer(
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                    children: List.generate(
-                      6,
-                      (i) => Text('☁️', style: TextStyle(fontSize: 46.0 + (i % 2) * 10, color: Colors.white)),
-                    ),
-                  ),
-                ),
-              ));
-            }
+        // ฉากหลัง (เมฆ เกาะลอย ต้นสน หน้าผา) วาดด้วยโค้ด ไม่ใช้อิโมจิ
+        kids.add(Positioned.fill(
+          child: RepaintBoundary(
+            child: CustomPaint(
+              painter: _MapSceneryPainter(_GrammarBridgeGameState._themes, tops, hs),
+            ),
+          ),
+        ));
 
-            kids.add(Positioned.fill(
-              child: CustomPaint(painter: _MapPathPainter(pts, GameProgress.nextLevel)),
-            ));
+        kids.add(Positioned.fill(
+          child: CustomPaint(painter: _MapPathPainter(pts, GameProgress.nextLevel)),
+        ));
 
-            for (int k = 0; k < worlds; k++) {
-              kids.add(_ribbon(k, k == 0 ? _mapH - 38 : bnd(k)));
-            }
+        for (int k = 0; k < worlds; k++) {
+          kids.add(_ribbon(k, k == 0 ? _yOf(1) + 84 : bnd(k)));
+        }
 
-            for (int l = 1; l <= GameProgress.totalLevels; l++) {
-              kids.add(_node(l, pts[l - 1].dx, pts[l - 1].dy));
-            }
+        for (int l = 1; l <= GameProgress.totalLevels; l++) {
+          kids.add(_node(l, pts[l - 1].dx, pts[l - 1].dy));
+        }
 
-            final sp = pts[_selected - 1];
-            final th = _GrammarBridgeGameState._themes[GameProgress.stageOf(_selected)];
-            kids.add(AnimatedPositioned(
-              duration: const Duration(milliseconds: 400),
-              curve: Curves.easeOutBack,
-              left: sp.dx - 23,
-              top: sp.dy - 28 - 54,
-              child: IgnorePointer(child: _Bounce(height: 8, child: _UserAvatarToken(accent: th.accent))),
-            ));
+        final sp = pts[_selected - 1];
+        final th = _GrammarBridgeGameState._themes[GameProgress.stageOf(_selected)];
+        kids.add(Positioned(
+          left: sp.dx - 30,
+          top: sp.dy - 32 - 74,
+          child: IgnorePointer(child: _UserAvatarToken(accent: th.accent, size: 60)),
+        ));
 
-            return SingleChildScrollView(
-              controller: _scroll,
-              physics: const BouncingScrollPhysics(),
-              child: SizedBox(width: w, height: _mapH, child: Stack(clipBehavior: Clip.hardEdge, children: kids)),
-            );
-          },
-        ),
-      ),
+        return SingleChildScrollView(
+          controller: _scroll,
+          physics: const BouncingScrollPhysics(),
+          child: SizedBox(width: w, height: _mapH, child: Stack(clipBehavior: Clip.hardEdge, children: kids)),
+        );
+      },
     );
   }
 
@@ -1708,15 +1778,35 @@ class _LevelSelectScreenState extends State<LevelSelectScreen> with WidgetsBindi
       edge: shadow,
       radius: 16,
       onTap: () {
-        AudioHub.sfx('click.mp3');
         Navigator.pop(ctx);
       },
       child: const Text('ปิด', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w900, color: Colors.white)),
     );
   }
 
+  Widget _dlgTitle(IconData icon, String text, Color color) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        Icon(icon, color: color, size: 26),
+        const SizedBox(width: 8),
+        Flexible(child: Text(text, style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900, color: color))),
+      ],
+    );
+  }
+
+  Widget _switchTitle(IconData icon, String text) {
+    return Row(
+      children: [
+        Icon(icon, color: _C.purpleDk, size: 22),
+        const SizedBox(width: 8),
+        Expanded(child: Text(text, style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 15, color: _C.ink))),
+      ],
+    );
+  }
+
   void _showBook() {
-    AudioHub.sfx('sticker.mp3', volume: 0.7);
     showDialog(
       context: context,
       builder: (ctx) => _dialogBox(
@@ -1724,8 +1814,7 @@ class _LevelSelectScreenState extends State<LevelSelectScreen> with WidgetsBindi
         Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Text('📖 สมุดสะสม ${GameProgress.collection.length}/${GameProgress.stickers.length}',
-                style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w900, color: _C.pinkDk)),
+            _dlgTitle(Icons.menu_book_rounded, 'สมุดสะสม ${GameProgress.collection.length} / ${GameProgress.stickers.length}', _C.pinkDk),
             const SizedBox(height: 4),
             const Text('ผ่านด่านเพื่อสะสมเพื่อนสัตว์ และตอบถูกทุกข้อในด่านเลขคู่เพื่อรับของโบนัส',
                 textAlign: TextAlign.center,
@@ -1758,7 +1847,7 @@ class _LevelSelectScreenState extends State<LevelSelectScreen> with WidgetsBindi
                               child: Column(
                                 mainAxisSize: MainAxisSize.min,
                                 children: [
-                                  const Text('❓', style: TextStyle(fontSize: 18)),
+                                  const Icon(Icons.question_mark_rounded, size: 20, color: _C.greyDk),
                                   Text(hint, style: const TextStyle(fontSize: 9, fontWeight: FontWeight.w800, color: _C.greyDk)),
                                 ],
                               ),
@@ -1777,7 +1866,6 @@ class _LevelSelectScreenState extends State<LevelSelectScreen> with WidgetsBindi
   }
 
   void _showSettings() {
-    AudioHub.sfx('click.mp3');
     showDialog(
       context: context,
       builder: (ctx) => StatefulBuilder(
@@ -1786,30 +1874,8 @@ class _LevelSelectScreenState extends State<LevelSelectScreen> with WidgetsBindi
           Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Text('⚙️ ตั้งค่า', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900, color: _C.purpleDk)),
+              _dlgTitle(Icons.settings_rounded, 'ตั้งค่า', _C.purpleDk),
               const SizedBox(height: 6),
-              SwitchListTile(
-                contentPadding: EdgeInsets.zero,
-                activeColor: _C.green,
-                value: GameSettings.sound,
-                onChanged: (v) {
-                  setD(() => GameSettings.sound = v);
-                  AudioHub.sfx('click.mp3');
-                  GameProgress.save();
-                },
-                title: const Text('🔊 เสียงเอฟเฟกต์', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 15, color: _C.ink)),
-              ),
-              SwitchListTile(
-                contentPadding: EdgeInsets.zero,
-                activeColor: _C.green,
-                value: GameSettings.music,
-                onChanged: (v) {
-                  setD(() => GameSettings.music = v);
-                  AudioHub.refreshBgm();
-                  GameProgress.save();
-                },
-                title: const Text('🎵 เพลงประกอบ', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 15, color: _C.ink)),
-              ),
               SwitchListTile(
                 contentPadding: EdgeInsets.zero,
                 activeColor: _C.green,
@@ -1819,7 +1885,7 @@ class _LevelSelectScreenState extends State<LevelSelectScreen> with WidgetsBindi
                   if (v) VoiceHub.speak('Hello! Let us build a bridge.');
                   GameProgress.save();
                 },
-                title: const Text('🗣️ เสียงอ่านภาษาอังกฤษ', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 15, color: _C.ink)),
+                title: _switchTitle(Icons.record_voice_over_rounded, 'เสียงอ่านภาษาอังกฤษ'),
               ),
               const SizedBox(height: 4),
               GestureDetector(
@@ -1827,15 +1893,18 @@ class _LevelSelectScreenState extends State<LevelSelectScreen> with WidgetsBindi
                   final ok = await showDialog<bool>(
                     context: ctx,
                     builder: (c) => AlertDialog(
-                      title: const Text('รีเซ็ตความคืบหน้า?'),
-                      content: const Text('ดาวและสมุดสะสมจะหายทั้งหมดนะ'),
+                      title: const Text('รีเซ็ตความคืบหน้า ?'),
+                      content: const Text('ดาวและสมุดสะสมจะหายทั้งหมดนะ\n(ต้องใช้รหัส PIN ผู้ปกครอง)'),
                       actions: [
                         TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('ยกเลิก')),
                         TextButton(onPressed: () => Navigator.pop(c, true), child: const Text('รีเซ็ต')),
                       ],
                     ),
                   );
-                  if (ok == true) {
+                  if (ok != true || !ctx.mounted) return;
+                  // ลบความคืบหน้าของเด็กได้เฉพาะผู้ปกครอง
+                  final allowed = await showParentPinPrompt(ctx, title: 'ผู้ปกครองยืนยันก่อนรีเซ็ต');
+                  if (allowed) {
                     GameProgress.reset();
                     if (mounted) {
                       setState(() => _selected = 1);
@@ -1853,8 +1922,15 @@ class _LevelSelectScreenState extends State<LevelSelectScreen> with WidgetsBindi
                     borderRadius: BorderRadius.circular(16),
                     border: Border.all(color: const Color(0xFFFFA4B8), width: 2),
                   ),
-                  child: const Text('🗑️ เริ่มเล่นใหม่ทั้งหมด',
-                      style: TextStyle(fontSize: 14, fontWeight: FontWeight.w900, color: Color(0xFFD42A55))),
+                  child: const Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.delete_outline_rounded, color: Color(0xFFD42A55), size: 20),
+                      SizedBox(width: 6),
+                      Text('เริ่มเล่นใหม่ทั้งหมด',
+                          style: TextStyle(fontSize: 14, fontWeight: FontWeight.w900, color: Color(0xFFD42A55))),
+                    ],
+                  ),
                 ),
               ),
               const SizedBox(height: 12),
@@ -1866,145 +1942,420 @@ class _LevelSelectScreenState extends State<LevelSelectScreen> with WidgetsBindi
     );
   }
 
+  // ---------- ส่วนประกอบหน้าจอตามรูปแบบใหม่ ----------
+
+  /// ป้ายกระจกโปร่งใส (ดาว / เหรียญ)
+  Widget _glassPill(IconData icon, Color iconColor, String text) {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(6, 2, 14, 2),
+      decoration: BoxDecoration(
+        color: const Color(0x80BFDFFF),
+        borderRadius: BorderRadius.circular(30),
+        border: Border.all(color: const Color(0xCCFFFFFF), width: 2),
+        boxShadow: const [BoxShadow(color: Color(0x22000000), blurRadius: 6, offset: Offset(0, 3))],
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, color: iconColor, size: 26, shadows: const [Shadow(color: Color(0x55000000), blurRadius: 3, offset: Offset(0, 2))]),
+          const SizedBox(width: 4),
+          Text(text,
+              style: const TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.w900,
+                color: Colors.white,
+                shadows: [Shadow(color: Color(0x80234A8A), blurRadius: 3, offset: Offset(0, 2))],
+              )),
+        ],
+      ),
+    );
+  }
+
+  // ignore: unused_element
+  Widget _woodSign() {
+    const brown = Color(0xFF6B3A14);
+    Widget nail(Alignment al) => Align(
+          alignment: al,
+          child: Container(
+            width: 5,
+            height: 5,
+            margin: const EdgeInsets.all(4),
+            decoration: const BoxDecoration(color: Color(0xFF5A2F10), shape: BoxShape.circle),
+          ),
+        );
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
+      decoration: BoxDecoration(
+        gradient: const LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [Color(0xFFD9A066), Color(0xFFB8743A)],
+        ),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: brown, width: 3),
+        boxShadow: const [
+          BoxShadow(color: brown, offset: Offset(0, 4)),
+          BoxShadow(color: Color(0x33000000), blurRadius: 8, offset: Offset(0, 8)),
+        ],
+      ),
+      child: Stack(
+        children: [
+          Positioned.fill(child: Stack(children: [
+            nail(Alignment.topLeft),
+            nail(Alignment.topRight),
+            nail(Alignment.bottomLeft),
+            nail(Alignment.bottomRight),
+          ])),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 6),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const SizedBox(width: 36, height: 24, child: CustomPaint(painter: _BridgeIconPainter())),
+                const SizedBox(width: 8),
+                const Text('เลือกด่าน',
+                    style: TextStyle(
+                      fontSize: 22,
+                      fontWeight: FontWeight.w900,
+                      color: Color(0xFFFFF3D6),
+                      shadows: [
+                        Shadow(color: brown, offset: Offset(1.5, 1.5)),
+                        Shadow(color: brown, offset: Offset(-1.5, -1.5)),
+                        Shadow(color: brown, offset: Offset(1.5, -1.5)),
+                        Shadow(color: brown, offset: Offset(-1.5, 1.5)),
+                      ],
+                    )),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _topOverlay() {
+    return IgnorePointer(
+      child: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+            child: Row(
+              children: [
+                _glassPill(Icons.star_rounded, const Color(0xFFFFC21A), '${GameProgress.totalStars} / ${GameProgress.totalLevels * 3}'),
+                const Spacer(),
+                // เหรียญจริงของบัญชี
+                ValueListenableBuilder<int?>(
+                  valueListenable: CoinBalance.value,
+                  builder: (_, coins, _) =>
+                      _glassPill(Icons.monetization_on_rounded, const Color(0xFFFFB627), coins == null ? '-' : '$coins'),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 10),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 2),
+            decoration: BoxDecoration(
+              color: const Color(0xB3DCEBFF),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Text('ผ่านแล้ว ${GameProgress.stars.length} / ${GameProgress.totalLevels} ด่าน',
+                style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w800, color: Color(0xFF2B4A7A))),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _bottomPanel() {
+    return Container(
+      decoration: const BoxDecoration(
+        color: Color(0xFFE3EDFB),
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+        border: Border(top: BorderSide(color: Color(0xFFF4F8FF), width: 2)),
+        boxShadow: [BoxShadow(color: Color(0x33000000), blurRadius: 12, offset: Offset(0, -3))],
+      ),
+      child: SafeArea(
+        top: false,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 2),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFF4F7FF),
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text('ความยาก : ${GameProgress.difficultyLabel(_selected)}',
+                        style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: Color(0xFF2B3A67))),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 6),
+              Row(
+                children: [
+                  Expanded(
+                    child: _Candy(
+                      full: true,
+                      onTap: _play,
+                      a: const Color(0xFF4FE59A),
+                      b: const Color(0xFF1FB86B),
+                      edge: const Color(0xFF12894E),
+                      radius: 22,
+                      padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 10),
+                      child: FittedBox(
+                        fit: BoxFit.scaleDown,
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Container(
+                              width: 26,
+                              height: 26,
+                              decoration: BoxDecoration(
+                                gradient: const LinearGradient(
+                                  begin: Alignment.topCenter,
+                                  end: Alignment.bottomCenter,
+                                  colors: [Color(0xFFFFB02E), Color(0xFFFF8A00)],
+                                ),
+                                borderRadius: BorderRadius.circular(6),
+                                border: Border.all(color: Colors.white, width: 1.5),
+                              ),
+                              child: const Icon(Icons.play_arrow_rounded, color: Colors.white, size: 19),
+                            ),
+                            const SizedBox(width: 8),
+                            Text('เล่นด่าน $_selected',
+                                style: const TextStyle(
+                                  fontSize: 20,
+                                  fontWeight: FontWeight.w900,
+                                  color: Colors.white,
+                                  shadows: [Shadow(color: Color(0x55000000), offset: Offset(0, 2), blurRadius: 2)],
+                                )),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  _Candy(
+                    onTap: _showBook,
+                    a: const Color(0xFFFF6FAE),
+                    b: const Color(0xFFFF3F8E),
+                    edge: _C.pinkDk,
+                    radius: 22,
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(Icons.menu_book_rounded, color: Colors.white, size: 21),
+                        const SizedBox(width: 4),
+                        Text('${GameProgress.collection.length}',
+                            style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w900, color: Colors.white)),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  _Candy(
+                    onTap: _showSettings,
+                    a: const Color(0xFFB48AFF),
+                    b: const Color(0xFF7E55EE),
+                    edge: _C.purpleDk,
+                    radius: 22,
+                    padding: const EdgeInsets.all(10),
+                    child: const Icon(Icons.settings_rounded, color: Colors.white, size: 24),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    final th = _GrammarBridgeGameState._themes[_world];
     return Scaffold(
       body: _GameScaffoldBody(
         title: 'สร้างสะพาน',
         color: const Color(0xFF2F6FE0),
         onBack: _back,
-        child: AnimatedContainer(
-        duration: const Duration(milliseconds: 400),
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-            colors: [th.skyTop, th.skyBottom, th.pageBottom],
-          ),
+        child: Stack(
+          children: [
+            Positioned.fill(child: _buildMap()),
+            Positioned(top: 0, left: 0, right: 0, child: _topOverlay()),
+            Positioned(bottom: 0, left: 0, right: 0, child: _bottomPanel()),
+          ],
         ),
-        child: Stack(children: [
-          const Positioned.fill(child: _FloatingBackdrop()),
-          SafeArea(
-          child: Column(
-            children: [
-              Padding(
-                padding: const EdgeInsets.fromLTRB(14, 10, 14, 0),
-                child: Row(
-                  children: [
-                    _whitePill('⭐ ${GameProgress.totalStars}/${GameProgress.totalLevels * 3}', _C.orangeDk, size: 15),
-                    const Spacer(),
-                    const _CoinPill(),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 8),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  const _Bounce(child: Text('🐼', style: TextStyle(fontSize: 34))),
-                  const SizedBox(width: 8),
-                  // ป้ายไม้
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 8),
-                    decoration: BoxDecoration(
-                      gradient: const LinearGradient(
-                        begin: Alignment.topCenter,
-                        end: Alignment.bottomCenter,
-                        colors: [Color(0xFFFFCB80), Color(0xFFE8933F)],
-                      ),
-                      borderRadius: BorderRadius.circular(18),
-                      border: Border.all(color: const Color(0xFF8A4E1F), width: 4),
-                      boxShadow: const [
-                        BoxShadow(color: Color(0xFF6B3A14), offset: Offset(0, 5)),
-                        BoxShadow(color: Color(0x33000000), blurRadius: 8, offset: Offset(0, 8)),
-                      ],
-                    ),
-                    child: const Text('🌉 เลือกด่าน',
-                        style: TextStyle(
-                          fontSize: 25,
-                          fontWeight: FontWeight.w900,
-                          color: Colors.white,
-                          shadows: [
-                            Shadow(color: Color(0xFF6B3A14), offset: Offset(2, 2)),
-                            Shadow(color: Color(0xFF6B3A14), offset: Offset(-2, -2)),
-                            Shadow(color: Color(0xFF6B3A14), offset: Offset(2, -2)),
-                            Shadow(color: Color(0xFF6B3A14), offset: Offset(-2, 2)),
-                          ],
-                        )),
-                  ),
-                  const SizedBox(width: 8),
-                  const _Bounce(height: 9, child: Text('🎈', style: TextStyle(fontSize: 32))),
-                ],
-              ),
-              const SizedBox(height: 2),
-              Text('ผ่านแล้ว ${GameProgress.stars.length}/${GameProgress.totalLevels} ด่าน',
-                  style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w800, color: _C.ink)),
-              Expanded(child: _buildMap()),
-              Padding(
-                padding: const EdgeInsets.fromLTRB(14, 0, 14, 12),
-                child: Column(
-                  children: [
-                    _whitePill('ความยาก: ${GameProgress.difficultyLabel(_selected)} ${GameProgress.flames(_selected)}', _C.ink,
-                        size: 13),
-                    const SizedBox(height: 8),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: _Candy(
-                            full: true,
-                            onTap: _play,
-                            a: _C.green,
-                            b: const Color(0xFF2DCB7F),
-                            edge: _C.greenDk,
-                            radius: 26,
-                            padding: const EdgeInsets.symmetric(vertical: 12),
-                            child: Text('▶️ PLAY  LEVEL $_selected',
-                                style: const TextStyle(
-                                  fontSize: 20,
-                                  fontWeight: FontWeight.w900,
-                                  color: Colors.white,
-                                  shadows: [Shadow(color: Color(0x44000000), offset: Offset(0, 2), blurRadius: 2)],
-                                )),
-                          ),
-                        ),
-                        const SizedBox(width: 10),
-                        _Candy(
-                          onTap: _showBook,
-                          a: _C.pink,
-                          b: const Color(0xFFFF4F90),
-                          edge: _C.pinkDk,
-                          radius: 24,
-                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                          child: Text('📖 ${GameProgress.collection.length}',
-                              style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w900, color: Colors.white)),
-                        ),
-                        const SizedBox(width: 8),
-                        _Candy(
-                          onTap: _showSettings,
-                          a: _C.purple,
-                          b: const Color(0xFF8A63F0),
-                          edge: _C.purpleDk,
-                          radius: 24,
-                          padding: const EdgeInsets.all(10),
-                          child: const Icon(Icons.settings_rounded, color: Colors.white, size: 26),
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-        ),
-        ]),
-      ),
       ),
     );
   }
 }
 
-/// วาดทางเดินคดเคี้ยวของแผนที่ (ส่วนที่ผ่านแล้วเป็นสีชมพูเข้ม)
+/// ไอคอนสะพานโค้งบนป้ายไม้ (วาดด้วยโค้ด)
+class _BridgeIconPainter extends CustomPainter {
+  const _BridgeIconPainter();
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final w = size.width;
+    final h = size.height;
+    double yAt(double t) => 2 * (1 - t) * t * (0.15 * h) + (0.92 * h) * ((1 - t) * (1 - t) + t * t);
+    Path deck(double dy) {
+      final p = Path()..moveTo(0, 0.92 * h + dy);
+      p.quadraticBezierTo(w / 2, 0.15 * h + dy, w, 0.92 * h + dy);
+      return p;
+    }
+
+    Paint stroke(Color c, double wd) => Paint()
+      ..color = c
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = wd
+      ..strokeCap = StrokeCap.round;
+
+    final railUp = -0.3 * h;
+    // เสาราว
+    for (final t in [0.12, 0.34, 0.66, 0.88]) {
+      final x = w * t;
+      final y = yAt(t);
+      canvas.drawLine(Offset(x, y + railUp), Offset(x, y), stroke(const Color(0xFFD2323C), 2));
+    }
+    canvas.drawPath(deck(railUp), stroke(const Color(0xFFD2323C), 3));
+    canvas.drawPath(deck(0), stroke(const Color(0xFF6B3A14), 9));
+    canvas.drawPath(deck(0), stroke(const Color(0xFFE2A862), 6));
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter old) => false;
+}
+
+// ==========================================
+// 6. หน้าจอหลักเกม (Main Game Screen)/// วาดฉากหลังของแผนที่: เมฆ เกาะลอย หน้าผา ต้นสน (ไม่ใช้อิโมจิ)
+class _MapSceneryPainter extends CustomPainter {
+  final List<_SceneTheme> themes;
+  final List<double> tops;
+  final List<double> heights;
+  const _MapSceneryPainter(this.themes, this.tops, this.heights);
+
+  void _cloud(Canvas c, Offset o, double s) {
+    final shade = Paint()..color = const Color(0x338FB4E8);
+    final white = Paint()..color = const Color(0xF2FFFFFF);
+    void blob(Paint p, double dy) {
+      c.drawCircle(o + Offset(-30 * s, 6 * s + dy), 16 * s, p);
+      c.drawCircle(o + Offset(-10 * s, -6 * s + dy), 22 * s, p);
+      c.drawCircle(o + Offset(16 * s, -10 * s + dy), 26 * s, p);
+      c.drawCircle(o + Offset(40 * s, 4 * s + dy), 18 * s, p);
+      c.drawRRect(
+        RRect.fromRectAndRadius(Rect.fromCenter(center: o + Offset(4 * s, 10 * s + dy), width: 100 * s, height: 24 * s), Radius.circular(12 * s)),
+        p,
+      );
+    }
+
+    blob(shade, 5 * s);
+    blob(white, 0);
+  }
+
+  void _pine(Canvas c, Offset base, double s, Color body, Color light) {
+    c.drawRect(Rect.fromLTWH(base.dx - 4 * s, base.dy - 14 * s, 8 * s, 16 * s), Paint()..color = const Color(0xFF7A4B26));
+    for (int i = 0; i < 3; i++) {
+      final bottom = base.dy - 10 * s - i * 22 * s;
+      final tip = bottom - 40 * s;
+      final hw = (30 - i * 6) * s;
+      final tri = Path()
+        ..moveTo(base.dx, tip)
+        ..lineTo(base.dx + hw, bottom)
+        ..lineTo(base.dx - hw, bottom)
+        ..close();
+      c.drawPath(tri, Paint()..color = light);
+      final half = Path()
+        ..moveTo(base.dx, tip)
+        ..lineTo(base.dx + hw, bottom)
+        ..lineTo(base.dx, bottom)
+        ..close();
+      c.drawPath(half, Paint()..color = body);
+    }
+  }
+
+  void _island(Canvas c, Offset o, double s, _SceneTheme th) {
+    final rock = Path()
+      ..moveTo(o.dx - 48 * s, o.dy)
+      ..lineTo(o.dx + 48 * s, o.dy)
+      ..lineTo(o.dx + 22 * s, o.dy + 34 * s)
+      ..lineTo(o.dx + 4 * s, o.dy + 60 * s)
+      ..lineTo(o.dx - 14 * s, o.dy + 38 * s)
+      ..lineTo(o.dx - 40 * s, o.dy + 14 * s)
+      ..close();
+    c.drawPath(rock, Paint()..color = th.rock);
+    c.drawPath(
+      Path()
+        ..moveTo(o.dx + 48 * s, o.dy)
+        ..lineTo(o.dx + 22 * s, o.dy + 34 * s)
+        ..lineTo(o.dx + 4 * s, o.dy + 60 * s)
+        ..lineTo(o.dx + 8 * s, o.dy + 20 * s)
+        ..close(),
+      Paint()..color = th.rockLine,
+    );
+    c.drawOval(Rect.fromCenter(center: o, width: 108 * s, height: 24 * s), Paint()..color = th.hill2);
+    c.drawOval(Rect.fromCenter(center: o + Offset(0, -3 * s), width: 100 * s, height: 16 * s), Paint()..color = th.hill1);
+    _pine(c, o + Offset(10 * s, -2 * s), 0.6 * s, th.accentDk, th.accent);
+  }
+
+  void _ledge(Canvas c, bool left, double y, double w, double s, _SceneTheme th, Random rnd) {
+    final lw = (w * 0.2 + 20) * s;
+    double fx(double x) => left ? x : w - x;
+    final rock = Path()
+      ..moveTo(fx(-20), y)
+      ..lineTo(fx(lw), y)
+      ..lineTo(fx(lw - 12 * s), y + 56 * s)
+      ..lineTo(fx(lw - 36 * s), y + 104 * s)
+      ..lineTo(fx(-20), y + 104 * s)
+      ..close();
+    c.drawPath(rock, Paint()..color = th.rock);
+    c.drawLine(Offset(fx(lw - 14 * s), y + 14 * s), Offset(fx(lw - 22 * s), y + 70 * s),
+        Paint()..color = th.rockLine..strokeWidth = 3..strokeCap = StrokeCap.round);
+    final r = Rect.fromLTRB(left ? -30 : w - lw - 6, y - 14 * s, left ? lw + 6 : w + 30, y + 16 * s);
+    c.drawRRect(RRect.fromRectAndRadius(r, Radius.circular(14 * s)), Paint()..color = th.hill2);
+    c.drawRRect(RRect.fromRectAndRadius(r.deflate(3), Radius.circular(12 * s)), Paint()..color = th.hill1);
+    _pine(c, Offset(fx(lw * 0.3), y - 2), s, th.accentDk, th.accent);
+    _pine(c, Offset(fx(lw * 0.68), y + 2), 0.8 * s, th.accentDk, th.accent);
+    const flowers = [Color(0xFFFF5FA2), Color(0xFFFFE23D), Color(0xFFFFFFFF)];
+    for (int i = 0; i < 3; i++) {
+      c.drawCircle(Offset(fx(lw * (0.12 + 0.26 * i) + rnd.nextDouble() * 8), y + 4), 3.2 * s, Paint()..color = flowers[i]);
+    }
+  }
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    for (int k = 0; k < themes.length; k++) {
+      final th = themes[k];
+      final top = tops[k];
+      final h = heights[k];
+      canvas.save();
+      canvas.clipRect(Rect.fromLTWH(0, top, size.width, h));
+      final rnd = Random(31 * k + 7);
+      final rows = (h / 170).floor().clamp(1, 20).toInt();
+      for (int j = 0; j < rows; j++) {
+        final y = top + (j + 0.5) * h / rows;
+        final left = j.isEven;
+        _cloud(canvas, Offset(left ? size.width * 0.66 : size.width * 0.3, y - 60 + rnd.nextDouble() * 20), 0.8 + rnd.nextDouble() * 0.5);
+        if (j.isOdd) {
+          _island(canvas, Offset(left ? size.width * 0.8 : size.width * 0.2, y - 100), 0.85, th);
+        }
+        _ledge(canvas, left, y + 30, size.width, 0.9 + rnd.nextDouble() * 0.3, th, rnd);
+      }
+      canvas.restore();
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter old) => false;
+}
+
+/// วาดทางเดินคดเคี้ยวของแผนที่ เป็นสะพานไม้
 class _MapPathPainter extends CustomPainter {
   final List<Offset> pts; // index 0 = ด่าน 1
   final int reached;
@@ -2032,29 +2383,31 @@ class _MapPathPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    // ทางเดินเป็นสะพานไม้: ขอบขาว + ไม้สีอ่อน + แผ่นไม้พาดขวาง
     final full = _path(1, pts.length);
-    canvas.drawPath(full, _stroke(Colors.white, 56));
-    canvas.drawPath(full, _stroke(const Color(0xFFC98A4B), 48));
-    canvas.drawPath(full, _stroke(const Color(0xFFFFDDA8), 40));
-    _planks(canvas, full, const Color(0xFFD9A05F));
-    // ส่วนที่ผ่านแล้วเป็นไม้ทอง
-    final done = _path(1, reached.clamp(1, pts.length).toInt());
-    canvas.drawPath(done, _stroke(const Color(0xFFFFC53D), 40));
-    _planks(canvas, done, const Color(0xFFE59A1F));
+    canvas.drawPath(full.shift(const Offset(0, 6)), _stroke(const Color(0x33000000), 76));
+    canvas.drawPath(full, _stroke(const Color(0xFF6B3A14), 76));
+    canvas.drawPath(full, _stroke(const Color(0xFF9A6234), 68));
+    canvas.drawPath(full, _stroke(const Color(0xFFC98B4E), 58));
+    _planks(canvas, full);
   }
 
-  void _planks(Canvas canvas, Path p, Color c) {
-    final paint = Paint()
-      ..color = c
-      ..strokeWidth = 3
+  void _planks(Canvas canvas, Path p) {
+    final line = Paint()
+      ..color = const Color(0x556B3A14)
+      ..strokeWidth = 2.5
+      ..strokeCap = StrokeCap.round;
+    final grain = Paint()
+      ..color = const Color(0x33FFE2B0)
+      ..strokeWidth = 2
       ..strokeCap = StrokeCap.round;
     for (final m in p.computeMetrics()) {
-      for (double d = 12; d < m.length; d += 20) {
+      for (double d = 10; d < m.length; d += 22) {
         final t = m.getTangentForOffset(d);
         if (t == null) continue;
         final n = Offset(-t.vector.dy, t.vector.dx);
-        canvas.drawLine(t.position + n * 17, t.position - n * 17, paint);
+        canvas.drawLine(t.position + n * 28, t.position - n * 28, line);
+        canvas.drawLine(t.position + n * 20 + t.vector * 5, t.position + n * 6 + t.vector * 5, grain);
+        canvas.drawLine(t.position - n * 6 + t.vector * 9, t.position - n * 20 + t.vector * 9, grain);
       }
     }
   }
@@ -2063,28 +2416,30 @@ class _MapPathPainter extends CustomPainter {
   bool shouldRepaint(covariant _MapPathPainter old) => old.reached != reached || old.pts.length != pts.length;
 }
 
-// ==========================================
-// 6. หน้าจอหลักเกม (Main Game Screen)
+
 // ==========================================
 class GrammarBridgeGame extends StatefulWidget {
   /// ถ้าไม่ระบุ startLevel (เช่นถูกเรียกเป็นหน้าแรกจากที่อื่น) จะแสดง "หน้าเลือกด่าน" แทน
   /// ถ้าระบุเลขด่าน จึงจะเข้าเล่นเกมด่านนั้นทันที
   final int? startLevel;
-  const GrammarBridgeGame({super.key, this.startLevel});
+
+  /// The level left in the middle, to continue (null = start it fresh).
+  final BridgeRound? resume;
+
+  const GrammarBridgeGame({super.key, this.startLevel, this.resume});
 
   @override
   State<GrammarBridgeGame> createState() => _GrammarBridgeGameState();
 }
 
-class _GrammarBridgeGameState extends State<GrammarBridgeGame> with TickerProviderStateMixin {
-  int _lastTickSec = -1;
+class _GrammarBridgeGameState extends State<GrammarBridgeGame>
+    with TickerProviderStateMixin, WidgetsBindingObserver {
+  bool _away = false; // the app is in the background: the clock stops
+  final List<Future<GuessCoinResult>> _levelCoins = []; // real coins of this level
 
   int _level = 1;
   int _maxHp = 3;
   int _hp = 3;
-  int _score = 0;
-  int _combo = 0;
-  int _bestCombo = 0;
   int _wrongCount = 0;
 
   List<Question> _questions = [];
@@ -2101,6 +2456,7 @@ class _GrammarBridgeGameState extends State<GrammarBridgeGame> with TickerProvid
   bool _paused = false;
   bool _chestOpen = false;
   bool _pandaFell = false;
+  // ignore: unused_field
   String? _mood;
   String? _banner;
   int _tipKind = 0;
@@ -2117,8 +2473,6 @@ class _GrammarBridgeGameState extends State<GrammarBridgeGame> with TickerProvid
   String _newSticker = '';
   bool _stickerIsNew = false;
 
-  int _hints = 3;
-  int _nets = 2;
   bool _isHintUsed = false;
   bool _isSafetyNetActive = false;
 
@@ -2138,7 +2492,6 @@ class _GrammarBridgeGameState extends State<GrammarBridgeGame> with TickerProvid
 
   Question get _q => _questions[_currentQuestionIndex];
   bool get _hasTimer => _secondsPerQuestion > 0;
-  int _tierFor(int combo) => combo >= 6 ? 2 : (combo >= 3 ? 1 : 0);
 
   static const List<_SceneTheme> _themes = [
     _SceneTheme(
@@ -2183,13 +2536,16 @@ class _GrammarBridgeGameState extends State<GrammarBridgeGame> with TickerProvid
     ),
   ];
 
-  static const List<String> _praise = ['เก่งมาก!', 'ยอดเยี่ยม!', 'Great job!', 'Awesome!', 'ถูกต้องเลย!', 'Wow!'];
-  static const List<String> _cheers = ['เก่งมาก! 🌟', 'ยอดเยี่ยม! 👏', 'Great job! 🎉', 'Awesome! 😎', 'เย้! ถูกต้อง! 🥳', 'Wow! 🤩'];
-  static const List<String> _comboCheers = ['สุดยอด! 🔥', 'Amazing! ✨', 'คอมโบมาแล้ว! 🔥', 'เก่งที่สุดเลย! 💪'];
-  static const List<String> _oops = ['ลองอีกที นะ 💪', 'ไม่เป็นไร! 🐼', 'สู้ๆ นะ! 🌈', 'เกือบแล้ว! 😉'];
-  static const List<String> _giggles = ['จั๊กจี้~ 😆', 'หิวไผ่จัง 🎋', 'ฮี่ฮี่ 🤭', 'Hello! 👋', 'เล่นกันเถอะ! 🎈'];
+  static const List<String> _praise = ['เก่งมาก !', 'ยอดเยี่ยม !', 'ถูกต้องเลย !', 'สุดยอด !'];
+  static const List<String> _cheers = ['เก่งมาก !', 'ยอดเยี่ยม !', 'เย้ ถูกต้อง !', 'เก่งจัง !'];
+  static const List<String> _oops = ['ลองอีกทีนะ', 'ไม่เป็นไร !', 'สู้ ๆ นะ !', 'เกือบแล้ว !'];
+  static const List<String> _giggles = ['จั๊กจี้~', 'หิวไผ่จัง', 'ฮี่ฮี่', 'เล่นกันเถอะ !'];
 
   _SceneTheme get _theme => _themes[GameProgress.stageOf(_level) % _themes.length];
+
+  // ตอบถูกติดกันหลายข้อ สะพานจะกลายเป็นสะพานทอง (3 ข้อ) / สะพานเวทมนตร์ (6 ข้อ)
+  int _streak = 0;
+  int _tierFor(int streak) => streak >= 6 ? 2 : (streak >= 3 ? 1 : 0);
 
   @override
   void initState() {
@@ -2200,21 +2556,51 @@ class _GrammarBridgeGameState extends State<GrammarBridgeGame> with TickerProvid
     _shakeCtrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 500));
     final start = widget.startLevel;
     if (start == null) return; // โหมดแสดงหน้าเลือกด่าน ไม่ต้องโหลดเกม
-    AudioHub.playBgm('bgm_game.wav');
-    _loadLevel(start, first: true);
+    WidgetsBinding.instance.addObserver(this);
+    _loadLevel(start, first: true, resume: widget.resume);
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _tick?.cancel();
     _bannerTimer?.cancel();
     _speechTimer?.cancel();
     _bgCtrl.dispose();
     _hopCtrl.dispose();
     _shakeCtrl.dispose();
-    AudioHub.duck(false);
     VoiceHub.stop();
     super.dispose();
+  }
+
+  // เวลาไม่เดินตอนสลับไปแอปอื่น / มีสายเข้า
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    _away = state != AppLifecycleState.resumed;
+  }
+
+  // ---------- เล่นต่อจากแผ่นไม้ถัดไป (แยกตามบัญชี เก็บบนเซิร์ฟเวอร์) ----------
+  void _saveResume() {
+    if (_hp < 1) {
+      _clearResume(); // no hearts left: leaving now must not bring them back
+      return;
+    }
+    if (_finished || _currentQuestionIndex < 1) return;
+    BridgeResume.save(
+      _level,
+      BridgeRound(
+        questions: [for (final q in _questions) bridgeQuestionId(q.sentence)],
+        index: _currentQuestionIndex,
+        hp: _hp,
+        wrong: _wrongCount,
+      ),
+    );
+    GameProgress.markUnfinished(_level, true);
+  }
+
+  void _clearResume() {
+    BridgeResume.clear(_level);
+    GameProgress.markUnfinished(_level, false);
   }
 
   /// อ่านประโยคโจทย์ (ช่องว่างอ่านว่า "blank")
@@ -2228,19 +2614,6 @@ class _GrammarBridgeGameState extends State<GrammarBridgeGame> with TickerProvid
     }
   }
 
-  void _playSound(String name) => AudioHub.sfx(name);
-
-  void _playRewardSounds() {
-    for (int i = 0; i < _starsEarned; i++) {
-      Future.delayed(Duration(milliseconds: 500 + i * 450), () => AudioHub.sfx('star${i + 1}.mp3'));
-    }
-    final t = 500 + _starsEarned * 450;
-    Future.delayed(Duration(milliseconds: t), () => AudioHub.sfx('coin.mp3'));
-    if (_stickerIsNew || _bonusSticker.isNotEmpty) {
-      Future.delayed(Duration(milliseconds: t + 450), () => AudioHub.sfx('sticker.mp3'));
-    }
-  }
-
   void _after(int ms, VoidCallback cb) {
     final run = _run;
     Future.delayed(Duration(milliseconds: ms), () {
@@ -2249,19 +2622,30 @@ class _GrammarBridgeGameState extends State<GrammarBridgeGame> with TickerProvid
     });
   }
 
-  void _loadLevel(int level, {bool first = false}) {
+  void _loadLevel(int level, {bool first = false, BridgeRound? resume}) {
     _run++;
     _tick?.cancel();
     _level = level;
-    _questions = QuestionBank.getQuestionsForLevel(level, _seenQuestions);
-    _seenQuestions.addAll(_questions.map((q) => q.sentence));
-    _currentQuestionIndex = 0;
-    _characterStep = 0;
     _maxHp = level <= 10 ? 5 : 4;
-    _hp = _maxHp;
-    _combo = 0;
-    _bestCombo = 0;
-    _wrongCount = 0;
+    _levelCoins.clear();
+    final List<Question>? saved =
+        resume == null ? null : [for (final id in resume.questions) QuestionBank.byId(id)].whereType<Question>().toList();
+    if (resume != null && saved != null && saved.length == resume.questions.length) {
+      // เล่นต่อ: โจทย์ชุดเดิม เริ่มที่แผ่นไม้ถัดไป
+      _questions = saved;
+      _currentQuestionIndex = resume.index;
+      _characterStep = resume.index;
+      _hp = resume.hp.clamp(1, _maxHp).toInt();
+      _wrongCount = resume.wrong;
+    } else {
+      _questions = QuestionBank.getQuestionsForLevel(level, _seenQuestions);
+      _currentQuestionIndex = 0;
+      _characterStep = 0;
+      _hp = _maxHp;
+      _wrongCount = 0;
+      _clearResume(); // a new game of this level
+    }
+    _seenQuestions.addAll(_questions.map((q) => q.sentence));
     _locked = false;
     _finished = false;
     _paused = false;
@@ -2272,16 +2656,15 @@ class _GrammarBridgeGameState extends State<GrammarBridgeGame> with TickerProvid
     _speech = null;
     _speechTimer?.cancel();
     _isSafetyNetActive = false;
-    _slotTier = List<int>.filled(_questions.length, -1);
+    _slotTier = List<int>.generate(_questions.length, (i) => i < _currentQuestionIndex ? 0 : -1);
     _fx.clear();
     _falls.clear();
     // จับเวลาตั้งแต่ด่าน 6 และค่อยๆ เร็วขึ้น (ต่ำสุด 12 วินาที)
     _secondsPerQuestion = level >= 6 ? max(12, 34 - level ~/ 2) : 0;
     _beginQuestion();
+    _streak = 0;
     _showBanner('${_theme.icon} ด่าน $level · ${_theme.name}  ${GameProgress.flames(level)}');
-    _say('ไปกันเลย! 🚀');
-    AudioHub.duck(false);
-    AudioHub.sfx('level_start.mp3');
+    _say('ไปกันเลย !');
     if (!first) setState(() {});
   }
 
@@ -2302,26 +2685,20 @@ class _GrammarBridgeGameState extends State<GrammarBridgeGame> with TickerProvid
 
   void _startTimer() {
     _tick?.cancel();
-    _lastTickSec = -1;
     if (!_hasTimer) return;
     _tick = Timer.periodic(const Duration(milliseconds: 100), (t) {
       if (!mounted) {
         t.cancel();
         return;
       }
-      if (_locked || _finished || _paused) return;
+      if (_locked || _finished || _paused || _away) return;
       setState(() => _stability = max(0.0, _stability - 0.1 / _secondsPerQuestion));
-      final left = (_stability * _secondsPerQuestion).ceil();
-      if (left <= 5 && left > 0 && left != _lastTickSec) {
-        _lastTickSec = left;
-        AudioHub.sfx('tick.mp3', volume: 0.7);
-      }
       if (_stability <= 0) _handleWrong(null);
     });
   }
 
   void _addFx(double x, double y, List<String> emojis) {
-    _fx.add(_Fx(_fxSeq++, x, y, emojis));
+    // ปิดเอฟเฟกต์ระเบิดตอนตอบถูก
   }
 
   void _say(String text, {int ms = 1600}) {
@@ -2335,7 +2712,6 @@ class _GrammarBridgeGameState extends State<GrammarBridgeGame> with TickerProvid
   void _tapPanda() {
     if (_locked || _finished || _hopCtrl.isAnimating) return;
     HapticFeedback.lightImpact();
-    AudioHub.sfx('giggle.mp3');
     setState(() {
       _hops = 2;
       _say(_pick(_giggles));
@@ -2344,11 +2720,7 @@ class _GrammarBridgeGameState extends State<GrammarBridgeGame> with TickerProvid
   }
 
   void _showBanner(String text) {
-    _banner = text;
-    _bannerTimer?.cancel();
-    _bannerTimer = Timer(const Duration(milliseconds: 1700), () {
-      if (mounted) setState(() => _banner = null);
-    });
+    // ปิดแบนเนอร์ข้อความกลางฉาก
   }
 
   void _handleAnswer(String option) {
@@ -2363,45 +2735,32 @@ class _GrammarBridgeGameState extends State<GrammarBridgeGame> with TickerProvid
   }
 
   void _onCorrect() {
+    Sfx.correct();
     final q = _q;
     final slot = _currentQuestionIndex;
-    final oldTier = _tierFor(_combo);
+    _streak++;
+    final tier = _tierFor(_streak);
     _tick?.cancel();
-    _combo++;
-    _bestCombo = max(_bestCombo, _combo);
-    final tier = _tierFor(_combo);
-    _score += 10 + _combo * 2 + (_stability * 10).round();
+    // Real coins: 2 per sentence per day (from the server).
+    _levelCoins.add(BridgeCoins.submit(bridgeQuestionId(q.sentence)));
 
     setState(() {
       _locked = true;
       _slotTier[slot] = tier;
       _filled = List<String?>.from(q.answerParts);
       _mood = '😄';
-      _say(_combo >= 3 ? _pick(_comboCheers) : _pick(_cheers));
+      _say(_pick(_cheers));
       _tipKind = 1;
       _tipText = '${_pick(_praise)}  ${q.fullSentence}';
-      if (tier > oldTier) {
-        _showBanner(tier == 2 ? '✨ MAGIC BRIDGE! ✨' : '⭐ GOLD BRIDGE! ⭐');
-      }
     });
 
     HapticFeedback.mediumImpact();
-    _playSound('wood_hammer.mp3');
-    AudioHub.sfx('correct.mp3', volume: 0.8);
-    if (_combo >= 6) {
-      AudioHub.sfx('combo3.mp3');
-    } else if (_combo >= 3) {
-      AudioHub.sfx('combo2.mp3');
-    } else if (_combo >= 2) {
-      AudioHub.sfx('combo1.mp3');
-    }
     // อ่านประโยคเต็มที่ถูกต้องให้ฟัง
     _after(500, () => VoiceHub.speak(q.fullSentence));
     _after(180, () {
       setState(() => _addFx(-1 - slot.toDouble(), 0, tier == 2 ? ['✨', '💎', '⭐'] : (tier == 1 ? ['⭐', '✨', '🪙'] : ['✨', '🔨', '⭐'])));
     });
     _after(420, () {
-      AudioHub.sfx('hop.mp3');
       setState(() {
         _characterStep = slot + 1;
         _hops = 2;
@@ -2417,6 +2776,7 @@ class _GrammarBridgeGameState extends State<GrammarBridgeGame> with TickerProvid
           _currentQuestionIndex++;
           _beginQuestion();
         });
+        _saveResume();
       }
     });
   }
@@ -2426,15 +2786,15 @@ class _GrammarBridgeGameState extends State<GrammarBridgeGame> with TickerProvid
     final q = _q;
     final slot = _currentQuestionIndex;
     _tick?.cancel();
+    Sfx.wrong();
 
     if (option == null) {
-      AudioHub.sfx('timeout.mp3');
       setState(() {
         _locked = true;
         _tipKind = 3;
-        _tipText = '⏰ หมดเวลาแล้ว ไม่เป็นไรนะ ลองอีกครั้ง! ${q.grammarRule}';
+        _tipText = '⏰ หมดเวลาแล้ว ไม่เป็นไรนะ ลองอีกครั้ง ! ${q.grammarRule}';
         _mood = '😅';
-        _say('ใจเย็นๆ นะ 😊');
+        _say('ใจเย็นๆ นะ');
       });
       _after(1600, () {
         setState(() {
@@ -2458,11 +2818,11 @@ class _GrammarBridgeGameState extends State<GrammarBridgeGame> with TickerProvid
       if (saved) {
         _isSafetyNetActive = false;
         _mood = '🛡️';
-        _say('ตาข่ายช่วยไว้! 🛡️');
-        _tipText = '🛡️ ตาข่ายนิรภัยช่วยไว้! ${q.grammarRule}';
+        _say('ตาข่ายช่วยไว้ !');
+        _tipText = 'ตาข่ายนิรภัยช่วยไว้ ! ${q.grammarRule}';
       } else {
         _hp--;
-        _combo = 0;
+        _streak = 0;
         _mood = '😱';
         _say(_pick(_oops));
         _tipText = q.grammarRule;
@@ -2471,17 +2831,12 @@ class _GrammarBridgeGameState extends State<GrammarBridgeGame> with TickerProvid
     });
 
     if (saved) {
-      AudioHub.sfx('shield.mp3');
-    } else {
-      _playSound('wood_break.mp3');
-      AudioHub.sfx('oops.mp3', volume: 0.8);
-    }
-    if (saved) {
       setState(() => _addFx(-1 - slot.toDouble(), 0, ['🛡️', '✨']));
     } else {
       _shakeCtrl.forward(from: 0);
     }
 
+    _saveResume(); // hearts left (when going on later)
     _after(1400, () {
       if (_hp <= 0) {
         _onGameOver();
@@ -2497,10 +2852,10 @@ class _GrammarBridgeGameState extends State<GrammarBridgeGame> with TickerProvid
   }
 
   void _useHint() {
-    if (_locked || _finished || _isHintUsed || _hints <= 0) return;
-    AudioHub.sfx('hint.mp3');
+    if (_locked || _finished || _isHintUsed || GameProgress.hints <= 0) return;
     setState(() {
-      _hints--;
+      GameProgress.hints--;
+      GameProgress.save();
       _isHintUsed = true;
       _tipKind = 3;
       _tipText = _q.grammarRule;
@@ -2508,24 +2863,25 @@ class _GrammarBridgeGameState extends State<GrammarBridgeGame> with TickerProvid
   }
 
   void _useNet() {
-    if (_locked || _finished || _isSafetyNetActive || _nets <= 0) return;
-    AudioHub.sfx('shield.mp3');
+    if (_locked || _finished || _isSafetyNetActive || GameProgress.nets <= 0) return;
     setState(() {
-      _nets--;
+      GameProgress.nets--;
+      GameProgress.save();
       _isSafetyNetActive = true;
       _tipKind = 3;
-      _tipText = '🛡️ Bamboo มีตาข่ายนิรภัยแล้ว! ตอบผิดได้ 1 ครั้งโดยไม่ตกเหว';
+      _tipText = 'มีตาข่ายนิรภัยแล้ว ! ตอบผิดได้ 1 ครั้งโดยไม่ตกเหว';
     });
   }
 
   void _onLevelClear() {
+    Sfx.complete();
     _finished = true;
     _tick?.cancel();
+    _clearResume();
     _starsEarned = _wrongCount == 0 ? 3 : (_wrongCount <= 2 ? 2 : 1);
-    _score += _starsEarned * 20;
     GameProgress.record(_level, _starsEarned);
-    _hints++;
-    if (_starsEarned == 3) _nets++;
+    GameProgress.hints++;
+    if (_starsEarned == 3) GameProgress.nets++;
     final idx = (_level - 1).clamp(0, GameProgress.bonusStart - 1).toInt();
     _newSticker = GameProgress.stickers[idx];
     _stickerIsNew = GameProgress.collection.add(idx);
@@ -2544,24 +2900,20 @@ class _GrammarBridgeGameState extends State<GrammarBridgeGame> with TickerProvid
       _hops = 5;
       _mood = '🎉';
       _chestOpen = true;
-      _confetti = true;
+      _confetti = false; // ไม่แสดงริบบิ้น/กระดาษโปรยตอนผ่านด่าน
       _confettiKey++;
-      _say('เราทำได้แล้ว! 🎉', ms: 2400);
-      _showBanner('🎉 สร้างสะพานสำเร็จ! 🎉');
+      _say('เราทำได้แล้ว !', ms: 2400);
+      _showBanner('สร้างสะพานสำเร็จ !');
       _addFx(-1000, 0, ['🎉', '⭐', '✨', '🎊']);
     });
     _hopCtrl.forward(from: 0);
-    AudioHub.duck(true);
-    _playSound('victory_fanfare.mp3');
     _after(2300, _showStageClearDialog);
   }
 
   void _onGameOver() {
     _finished = true;
     _tick?.cancel();
-    AudioHub.duck(true);
-    AudioHub.sfx('splash.mp3');
-    Future.delayed(const Duration(milliseconds: 700), () => AudioHub.sfx('wahwah.mp3'));
+    _clearResume();
     setState(() {
       _pandaFell = true;
       _mood = '😵';
@@ -2589,7 +2941,6 @@ class _GrammarBridgeGameState extends State<GrammarBridgeGame> with TickerProvid
   }
 
   void _showStageClearDialog() {
-    _playRewardSounds();
     showDialog(
       context: context,
       barrierDismissible: false,
@@ -2598,7 +2949,7 @@ class _GrammarBridgeGameState extends State<GrammarBridgeGame> with TickerProvid
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Text('LEVEL $_level CLEAR! 🎉',
+            Text('ผ่านด่าน $_level แล้ว !',
                 style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w900, color: _C.blueDk)),
             const SizedBox(height: 6),
             Row(
@@ -2623,18 +2974,8 @@ class _GrammarBridgeGameState extends State<GrammarBridgeGame> with TickerProvid
                 ),
               ),
             ),
-            const SizedBox(height: 6),
-            Wrap(
-              alignment: WrapAlignment.center,
-              spacing: 8,
-              runSpacing: 6,
-              children: [
-                _chip('🏅 $_score คะแนน', const Color(0xFFFFF4D6), _C.orangeDk),
-                _chip('🔥 คอมโบสูงสุด x$_bestCombo', const Color(0xFFFFE6EE), _C.pinkDk),
-                _chip('💡 ช่วยคิด +1', const Color(0xFFE2FBEE), _C.greenDk),
-                if (_starsEarned == 3) _chip('🛡️ ตาข่าย +1', const Color(0xFFDDFAFB), _C.tealDk),
-              ],
-            ),
+            const SizedBox(height: 8),
+            _coinChip(),
             const SizedBox(height: 12),
             _stickerCard(),
             const SizedBox(height: 12),
@@ -2644,7 +2985,7 @@ class _GrammarBridgeGameState extends State<GrammarBridgeGame> with TickerProvid
               SizedBox(
                 width: double.infinity,
                 child: _bigButton(
-                  label: 'ด่านถัดไป ➔',
+                  label: 'ด่านถัดไป',
                   a: _C.green,
                   b: const Color(0xFF2DCB7F),
                   shadow: _C.greenDk,
@@ -2656,7 +2997,7 @@ class _GrammarBridgeGameState extends State<GrammarBridgeGame> with TickerProvid
               ),
               const SizedBox(height: 10),
             ] else ...[
-              _chip('🏆 ผ่านครบทั้ง 50 ด่านแล้ว! เก่งที่สุดเลย', const Color(0xFFFFF4D6), _C.orangeDk),
+              _chip('ผ่านครบทั้ง 50 ด่านแล้ว ! เก่งที่สุดเลย', const Color(0xFFFFF4D6), _C.orangeDk),
               const SizedBox(height: 10),
             ],
             SizedBox(
@@ -2689,20 +3030,20 @@ class _GrammarBridgeGameState extends State<GrammarBridgeGame> with TickerProvid
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Text('💦 Bamboo ตกน้ำแล้ว!',
+            const Text('ตกน้ำแล้ว !',
                 style: TextStyle(fontSize: 23, fontWeight: FontWeight.w900, color: _C.blueDk)),
             const SizedBox(height: 6),
-            const Text('ปลาน้อยช่วยพา Bamboo ขึ้นฝั่งแล้ว 🐟 ลองสร้างสะพานอีกครั้งนะ! 💪',
+            const Text('ปลาน้อยช่วยพาขึ้นฝั่งแล้ว ลองสร้างสะพานอีกครั้งนะ !',
                 textAlign: TextAlign.center, style: TextStyle(color: _C.ink, fontWeight: FontWeight.w700)),
             const SizedBox(height: 10),
-            _chip('🏅 $_score คะแนน', const Color(0xFFE3F2FF), _C.blueDk),
+            _coinChip(),
             const SizedBox(height: 12),
             _ruleCard(),
             const SizedBox(height: 16),
             SizedBox(
               width: double.infinity,
               child: _bigButton(
-                label: 'ลองใหม่ 🔄',
+                label: 'ลองใหม่',
                 a: _C.green,
                 b: const Color(0xFF2DCB7F),
                 shadow: _C.greenDk,
@@ -2719,13 +3060,33 @@ class _GrammarBridgeGameState extends State<GrammarBridgeGame> with TickerProvid
     );
   }
 
+  /// Real coins earned in this level (from the server).
+  Widget _coinChip() {
+    return FutureBuilder<List<GuessCoinResult>>(
+      future: Future.wait(_levelCoins),
+      builder: (_, snap) {
+        final list = snap.data;
+        final coins = list?.fold<int>(0, (s, r) => s + r.coins) ?? 0;
+        final pending = list?.where((r) => r.pending).length ?? 0;
+        final String text = list == null
+            ? 'กำลังนับเหรียญ...'
+            : pending > 0
+                ? 'ได้ $coins เหรียญ (รอต่อเน็ต)'
+                : coins > 0
+                    ? 'ได้ $coins เหรียญ'
+                    : (_levelCoins.isEmpty ? 'ยังไม่ได้เหรียญในด่านนี้' : 'โจทย์ด่านนี้ได้เหรียญไปแล้ววันนี้');
+        return _chip(text, const Color(0xFFFFF4D6), _C.orangeDk);
+      },
+    );
+  }
+
   Widget _levelMenuButton(BuildContext ctx) {
     return Padding(
       padding: const EdgeInsets.only(top: 10),
       child: SizedBox(
         width: double.infinity,
         child: _bigButton(
-          label: '🗺️ เลือกด่าน',
+          label: 'เลือกด่าน',
           a: _C.orange,
           b: const Color(0xFFFF9330),
           shadow: _C.orangeDk,
@@ -2742,7 +3103,7 @@ class _GrammarBridgeGameState extends State<GrammarBridgeGame> with TickerProvid
   Widget _stickerCard() {
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.all(12),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
       decoration: BoxDecoration(
         color: const Color(0xFFF6EBFF),
         borderRadius: BorderRadius.circular(18),
@@ -2750,23 +3111,23 @@ class _GrammarBridgeGameState extends State<GrammarBridgeGame> with TickerProvid
       ),
       child: Column(
         children: [
-          Text((_stickerIsNew || _bonusSticker.isNotEmpty) ? '🎁 ได้เพื่อนใหม่แล้ว!' : '🧸 เพื่อนๆ ของ Bamboo',
-              style: const TextStyle(fontWeight: FontWeight.w900, color: _C.purpleDk, fontSize: 14)),
-          const SizedBox(height: 6),
+          Text((_stickerIsNew || _bonusSticker.isNotEmpty) ? 'ได้เพื่อนใหม่แล้ว !' : 'เพื่อน ๆ ในสมุดสะสม',
+              style: const TextStyle(fontWeight: FontWeight.w900, color: _C.purpleDk, fontSize: 12)),
+          const SizedBox(height: 2),
           TweenAnimationBuilder<double>(
             tween: Tween(begin: 0.0, end: 1.0),
             duration: const Duration(milliseconds: 900),
             curve: Curves.elasticOut,
             builder: (context, v, child) => Transform.scale(scale: v, child: child),
-            child: Text(_newSticker + (_bonusSticker.isEmpty ? '' : '  $_bonusSticker'), style: const TextStyle(fontSize: 52)),
+            child: Text(_newSticker + (_bonusSticker.isEmpty ? '' : '  $_bonusSticker'), style: const TextStyle(fontSize: 34)),
           ),
-          const SizedBox(height: 4),
+          const SizedBox(height: 2),
           Wrap(
             alignment: WrapAlignment.center,
-            spacing: 4,
+            spacing: 2,
             children: [
               for (final i in (GameProgress.collection.toList()..sort()))
-                Text(GameProgress.stickers[i], style: const TextStyle(fontSize: 22)),
+                Text(GameProgress.stickers[i], style: const TextStyle(fontSize: 16)),
             ],
           ),
         ],
@@ -2786,7 +3147,7 @@ class _GrammarBridgeGameState extends State<GrammarBridgeGame> with TickerProvid
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text('📖 จำไว้นะ', style: TextStyle(fontWeight: FontWeight.w900, color: _C.blueDk, fontSize: 14)),
+          const Text('จำไว้นะ', style: TextStyle(fontWeight: FontWeight.w900, color: _C.blueDk, fontSize: 14)),
           const SizedBox(height: 4),
           Text(_q.grammarRule,
               style: const TextStyle(fontSize: 13, height: 1.4, color: _C.ink, fontWeight: FontWeight.w700)),
@@ -2816,15 +3177,14 @@ class _GrammarBridgeGameState extends State<GrammarBridgeGame> with TickerProvid
       a: a,
       b: b,
       edge: shadow,
-      radius: 20,
-      padding: EdgeInsets.symmetric(vertical: small ? 10 : 14),
+      radius: 16,
+      padding: EdgeInsets.symmetric(vertical: small ? 6 : 9),
       onTap: () {
-        AudioHub.sfx('click.mp3');
         onTap();
       },
       child: Text(label,
           style: TextStyle(
-            fontSize: small ? 15 : 18,
+            fontSize: small ? 14 : 16,
             fontWeight: FontWeight.w900,
             color: Colors.white,
             shadows: const [Shadow(color: Color(0x44000000), offset: Offset(0, 2), blurRadius: 2)],
@@ -2844,10 +3204,10 @@ class _GrammarBridgeGameState extends State<GrammarBridgeGame> with TickerProvid
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Text('ออกจากเกม?',
+            const Text('ออกจากเกม ?',
                 style: TextStyle(fontSize: 22, fontWeight: FontWeight.w900, color: _C.orangeDk)),
             const SizedBox(height: 6),
-            const Text('Bamboo ยังข้ามสะพานไม่เสร็จนะ 🐼',
+            const Text('ยังข้ามสะพานไม่เสร็จนะ กลับมาเล่นต่อจากแผ่นไม้เดิมได้',
                 textAlign: TextAlign.center, style: TextStyle(color: _C.ink, fontWeight: FontWeight.w700)),
             const SizedBox(height: 16),
             SizedBox(
@@ -2934,119 +3294,179 @@ class _GrammarBridgeGameState extends State<GrammarBridgeGame> with TickerProvid
         color: const Color(0xFF2F6FE0),
         onBack: _confirmExit,
         child: Container(
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-            colors: [th.skyTop, th.skyBottom, th.pageBottom],
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+              colors: [
+                Color.lerp(th.skyTop, Colors.white, 0.55)!,
+                Color.lerp(th.skyBottom, Colors.white, 0.35)!,
+                Color.lerp(th.pageBottom, th.skyBottom, 0.3)!,
+              ],
+            ),
           ),
+          child: Stack(children: [
+            const Positioned.fill(child: CustomPaint(painter: _LeafBackdropPainter())),
+            SafeArea(
+              child: LayoutBuilder(
+                builder: (context, c) {
+                  // ย่อขนาดส่วนต่างๆ ตามความสูงจอ เพื่อให้ทุกอย่างพอดีโดยไม่ต้องเลื่อน
+                  _s = (c.maxHeight / 640).clamp(0.74, 1.0).toDouble();
+                  return Column(
+                    children: [
+                      _buildHeaderArea(),
+                      // พื้นที่ที่เหลือแบ่งให้ฉากสะพานเป็นส่วนใหญ่ และที่เหลือเป็น
+                      // ช่องไฟเท่า ๆ กันระหว่างบล็อก ทุกส่วนจึงเต็มหน้าและไม่เบียดกัน
+                      Expanded(
+                        flex: 10,
+                        child: LayoutBuilder(
+                          builder: (context, b) {
+                            final top = 8 * _s;
+                            final h = (b.maxHeight - 16 - top).clamp(90.0, 380.0).toDouble();
+                            return Align(
+                              alignment: Alignment.topCenter,
+                              child: Padding(
+                                padding: EdgeInsets.only(top: top),
+                                child: _buildScene(h),
+                              ),
+                            );
+                          },
+                        ),
+                      ),
+                      const Spacer(),
+                      _buildSentenceBoard(),
+                      _buildTip(),
+                      const Spacer(),
+                      _buildChoices(),
+                      const Spacer(),
+                      _buildHelperBar(),
+                      SizedBox(height: 16 * _s),
+                    ],
+                  );
+                },
+              ),
+            ),
+          ]),
         ),
-        child: Stack(children: [
-          const Positioned.fill(child: _FloatingBackdrop()),
-          SafeArea(
-          child: LayoutBuilder(
-            builder: (context, c) {
-              // ย่อขนาดส่วนต่างๆ ตามความสูงจอ เพื่อให้ทุกอย่างพอดีโดยไม่ต้องเลื่อน
-              _s = (c.maxHeight / 640).clamp(0.74, 1.0).toDouble();
-              return Column(
-                children: [
-                  _buildTopBar(),
-                  _buildProgressDots(),
-                  // ฉากสะพานกินพื้นที่ที่เหลือทั้งหมด
-                  Expanded(
-                    child: LayoutBuilder(
-                      builder: (context, b) {
-                        final h = (b.maxHeight - 16).clamp(90.0, 320.0).toDouble();
-                        return Align(alignment: Alignment.center, child: _buildScene(h));
-                      },
-                    ),
-                  ),
-                  _buildSentenceBoard(),
-                  _buildTip(),
-                  _buildChoices(),
-                  _buildHelperBar(),
-                  SizedBox(height: 8 * _s),
-                ],
-              );
-            },
-          ),
-        ),
-        ]),
-      ),
       ),
     );
   }
 
-  Widget _buildTopBar() {
-    return _buildTopBarRow();
+  BoxDecoration get _pillDeco => BoxDecoration(
+        color: const Color(0xCCFFFFFF),
+        borderRadius: BorderRadius.circular(22),
+        border: Border.all(color: Colors.white, width: 2),
+        boxShadow: const [BoxShadow(color: Color(0x1A000000), blurRadius: 5, offset: Offset(0, 2))],
+      );
+
+  Widget _statPill(IconData icon, Color color, String text) {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(8, 4, 12, 4),
+      decoration: _pillDeco,
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, color: color, size: 22),
+          const SizedBox(width: 4),
+          Text(text, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w900, color: Color(0xFF8A5A14))),
+        ],
+      ),
+    );
+  }
+
+  /// แถบข้อมูลด้านบน + แถบความคืบหน้า + หลอดทดลองที่เลื่อนตามความคืบหน้า
+  Widget _buildHeaderArea() {
+    return Column(children: [_buildTopBarRow(), _buildProgressDots()]);
   }
 
   Widget _buildTopBarRow() {
     final th = _theme;
     return Padding(
-      padding: const EdgeInsets.fromLTRB(10, 6, 10, 0),
+      padding: const EdgeInsets.fromLTRB(14, 8, 14, 0),
       child: Row(
         children: [
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text('LEVEL $_level',
-                    style: TextStyle(fontSize: 18 * _s, fontWeight: FontWeight.w900, color: th.accentDk, height: 1.1)),
-                Text('${th.icon} ${th.name}',
-                    style: TextStyle(fontSize: 12 * _s, fontWeight: FontWeight.w800, color: _C.ink)),
+                Text('ด่าน $_level',
+                    style: TextStyle(fontSize: 20 * _s, fontWeight: FontWeight.w900, color: const Color(0xFF1F2A6B), height: 1.1)),
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.park_rounded, size: 13 * _s, color: th.accentDk),
+                    const SizedBox(width: 3),
+                    Flexible(
+                      child: Text(th.name,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(fontSize: 12 * _s, fontWeight: FontWeight.w800, color: th.accentDk)),
+                    ),
+                  ],
+                ),
               ],
             ),
           ),
           Container(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(20),
-              border: Border.all(color: const Color(0xFFFFB3C6), width: 2),
-            ),
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+            decoration: _pillDeco,
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: List.generate(
                 _maxHp,
                 (i) => Padding(
-                  padding: const EdgeInsets.only(left: 1),
+                  padding: EdgeInsets.only(left: i == 0 ? 0 : 1),
                   child: AnimatedScale(
-                    scale: i < _hp ? 1.0 : 0.8,
+                    scale: i < _hp ? 1.0 : 0.85,
                     duration: const Duration(milliseconds: 200),
-                    child: Text(i < _hp ? '❤️' : '🤍', style: const TextStyle(fontSize: 16)),
+                    child: Icon(
+                      i < _hp ? Icons.favorite_rounded : Icons.favorite_border_rounded,
+                      color: i < _hp ? const Color(0xFFE8334A) : const Color(0xFFB9BEC9),
+                      size: 21,
+                    ),
                   ),
                 ),
               ),
             ),
           ),
-          const SizedBox(width: 8),
-          _whitePill('🏅 $_score', _C.orangeDk),
           const SizedBox(width: 6),
-          const _CoinPill(fontSize: 12),
+          ValueListenableBuilder<int?>(
+            valueListenable: CoinBalance.value,
+            builder: (_, coins, _) =>
+                _statPill(Icons.monetization_on_rounded, const Color(0xFFFFB627), coins == null ? '-' : '$coins'),
+          ),
         ],
       ),
     );
   }
 
-  /// แถบความคืบหน้าของด่าน (จุดต่อข้อ)
+  /// แถบความคืบหน้าของด่าน (ช่องต่อข้อ)
   Widget _buildProgressDots() {
-    final th = _theme;
     return Padding(
-      padding: const EdgeInsets.fromLTRB(14, 6, 14, 0),
+      padding: const EdgeInsets.fromLTRB(14, 8, 14, 0),
       child: Row(
         children: List.generate(_questions.length, (i) {
           final done = i < _slotTier.length && _slotTier[i] >= 0;
           final cur = i == _currentQuestionIndex && !_finished;
+          final filled = done || cur;
           return Expanded(
             child: AnimatedContainer(
               duration: const Duration(milliseconds: 250),
               height: 9,
               margin: const EdgeInsets.symmetric(horizontal: 2),
               decoration: BoxDecoration(
-                color: done ? _C.green : (cur ? th.accent : Colors.white.withAlpha(190)),
+                gradient: filled
+                    ? LinearGradient(
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                        colors: done
+                            ? const [Color(0xFF7BE89A), Color(0xFF22B455)]
+                            : const [Color(0xFFA6F0BC), Color(0xFF4FD07E)],
+                      )
+                    : null,
+                color: filled ? null : Colors.white.withAlpha(150),
                 borderRadius: BorderRadius.circular(6),
-                border: Border.all(color: Colors.white, width: 1.5),
+                border: Border.all(color: filled ? Colors.white : const Color(0xFFB9D3EE), width: 1.5),
               ),
             ),
           );
@@ -3062,7 +3482,10 @@ class _GrammarBridgeGameState extends State<GrammarBridgeGame> with TickerProvid
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(26),
         border: Border.all(color: Colors.white, width: 4),
-        boxShadow: const [BoxShadow(color: Color(0x33000000), offset: Offset(0, 5), blurRadius: 10)],
+        boxShadow: const [
+          BoxShadow(color: Color(0xFFBBD7F3), spreadRadius: 3),
+          BoxShadow(color: Color(0x33000000), offset: Offset(0, 6), blurRadius: 10),
+        ],
       ),
       child: ClipRRect(
         borderRadius: BorderRadius.circular(22),
@@ -3081,10 +3504,11 @@ class _GrammarBridgeGameState extends State<GrammarBridgeGame> with TickerProvid
 
   Widget _sceneStack(_SceneGeo g) {
     final th = _theme;
-    final bg = _bgCtrl.value;
-    final tier = _tierFor(_combo);
+    final anim = _bgCtrl.value; // ใช้กับเอฟเฟกต์ตอนเล่นเท่านั้น
+    const bg = 0.3; // พื้นหลังอยู่นิ่ง ไม่ขยับ
+    final tier = _tierFor(_streak);
     final shaky = _hasTimer && !_finished && _stability < 0.35;
-    final wobble = shaky ? sin(bg * pi * 2 * 14) * (1 - _stability / 0.35) * 3.0 : 0.0;
+    final wobble = shaky ? sin(anim * pi * 2 * 14) * (1 - _stability / 0.35) * 3.0 : 0.0;
     final hopDy = -sin(_hopCtrl.value * pi * _hops).abs() * 14;
     final shakeDx = sin(_shakeCtrl.value * pi * 10) * 7 * (1 - _shakeCtrl.value);
 
@@ -3111,64 +3535,53 @@ class _GrammarBridgeGameState extends State<GrammarBridgeGame> with TickerProvid
         ),
       ),
     ));
-    // แสงอาทิตย์เรืองๆ
+    // ดวงอาทิตย์หน้ายิ้ม
     kids.add(Positioned(
-      right: 4,
-      top: -6,
+      right: 8,
+      top: 4,
       child: IgnorePointer(
-        child: Container(
-          width: 80,
-          height: 80,
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            gradient: RadialGradient(colors: [Colors.white.withAlpha(190), Colors.white.withAlpha(0)]),
-          ),
-        ),
+        child: SizedBox(width: 62, height: 62, child: CustomPaint(painter: _SunPainter(bg * pi * 2 * 0.5))),
       ),
     ));
-    kids.add(Positioned(
-      right: 16,
-      top: 8,
-      child: Transform.rotate(angle: bg * pi * 2, child: Text(th.sun, style: const TextStyle(fontSize: 34))),
-    ));
     for (int k = 0; k < 3; k++) {
-      final x = ((bg + k * 0.34) % 1.0) * (g.w + 90) - 60;
+      final x = ((bg + k * 0.34) % 1.0) * (g.w + 120) - 90;
       kids.add(Positioned(
         left: x,
-        top: 22.0 + k * 20,
-        child: Opacity(opacity: 0.92, child: Text(th.floater, style: TextStyle(fontSize: 28.0 + k * 6))),
+        top: 14.0 + k * 22,
+        child: IgnorePointer(
+          child: Opacity(
+            opacity: 0.95,
+            child: SizedBox(width: 60.0 + k * 14, height: 24.0 + k * 6, child: const CustomPaint(painter: _CloudPainter())),
+          ),
+        ),
       ));
     }
     final bx = ((bg * 1.5) % 1.0) * (g.w + 60) - 30;
     kids.add(Positioned(
       left: g.w - bx,
       top: g.h * 0.26 + sin(bg * pi * 6) * 5,
-      child: Text(th.bird, style: const TextStyle(fontSize: 18)),
+      child: const SizedBox(width: 24, height: 18, child: CustomPaint(painter: _BirdPainter())),
     ));
 
     kids.add(Positioned.fill(
       child: CustomPaint(painter: _ScenePainter(t: bg, wobble: wobble, tier: tier, g: g, th: th)),
     ));
 
-    final fp = (bg * 2) % 1.0;
-    if (fp < 0.32) {
-      final u = fp / 0.32;
-      kids.add(Positioned(
-        left: g.w * 0.36 + u * 56,
-        top: g.waterTop + 6 - sin(u * pi) * 34,
-        child: Transform.rotate(angle: (u - 0.5) * 1.6, child: Text(th.fish, style: const TextStyle(fontSize: 18))),
-      ));
-    }
-
-    kids.add(Positioned(left: 0, top: g.deckY - 38, child: Text(th.deco, style: const TextStyle(fontSize: 32))));
     kids.add(Positioned(
-      right: 2,
-      top: g.deckY - 34,
+      left: 0,
+      top: g.deckY - 58,
+      child: SizedBox(width: 38, height: 62, child: CustomPaint(painter: _TreePainter(th.accentDk, th.accent))),
+    ));
+    kids.add(Positioned(
+      right: 6,
+      top: g.deckY - 36,
       child: AnimatedScale(
-        scale: _chestOpen ? 1.35 : 1.0,
+        scale: _chestOpen ? 1.3 : 1.0,
         duration: const Duration(milliseconds: 400),
         curve: Curves.easeOutBack,
-        child: Text(_chestOpen ? '🏆' : '🎁', style: const TextStyle(fontSize: 30)),
+        child: _chestOpen
+            ? const Icon(Icons.emoji_events_rounded, color: Color(0xFFFFB800), size: 36)
+            : _giftBox(),
       ),
     ));
 
@@ -3179,7 +3592,7 @@ class _GrammarBridgeGameState extends State<GrammarBridgeGame> with TickerProvid
         child = _placedPlank(i, _slotTier[i]);
       } else {
         final next = i == _currentQuestionIndex && !_finished;
-        final pulse = next ? 0.4 + 0.25 * sin(bg * pi * 2 * 8) : 0.25;
+        final pulse = next ? 0.4 + 0.25 * sin(anim * pi * 2 * 8) : 0.25;
         child = Container(
           decoration: BoxDecoration(
             color: Colors.white.withAlpha((pulse * 255).round().clamp(0, 255)),
@@ -3239,9 +3652,7 @@ class _GrammarBridgeGameState extends State<GrammarBridgeGame> with TickerProvid
                 ),
               Opacity(opacity: _pandaFell ? 0.75 : 1.0, child: _UserAvatarToken(accent: th.accent)),
               if (tier > 0 && !_pandaFell)
-                const Positioned(top: -12, left: 10, child: Text('👑', style: TextStyle(fontSize: 20))),
-              if (_mood != null)
-                Positioned(top: -16, right: -6, child: Text(_mood!, style: const TextStyle(fontSize: 22))),
+                const Positioned(top: -14, left: 12, child: Icon(Icons.workspace_premium_rounded, color: Color(0xFFFFC21A), size: 24)),
               Positioned.fill(
                 child: GestureDetector(behavior: HitTestBehavior.translucent, onTap: _tapPanda),
               ),
@@ -3305,7 +3716,7 @@ class _GrammarBridgeGameState extends State<GrammarBridgeGame> with TickerProvid
         width: g.w * 0.5,
         child: Row(
           children: [
-            Text(_stability < 0.35 ? '⚠️' : '⏱️', style: const TextStyle(fontSize: 16)),
+            Icon(_stability < 0.35 ? Icons.warning_amber_rounded : Icons.timer_rounded, size: 18, color: _stability < 0.35 ? const Color(0xFFFF5C7A) : Colors.white),
             const SizedBox(width: 4),
             Expanded(
               child: ClipRRect(
@@ -3321,34 +3732,6 @@ class _GrammarBridgeGameState extends State<GrammarBridgeGame> with TickerProvid
           ],
         ),
       ));
-    }
-
-    if (_combo >= 2) {
-      final pc = tier == 2 ? const Color(0xFF26C6DA) : (tier == 1 ? const Color(0xFFFFB800) : _C.pink);
-      kids.add(Positioned(
-        left: 10,
-        top: _hasTimer ? 30 : 8,
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
-          decoration: BoxDecoration(
-            color: pc,
-            borderRadius: BorderRadius.circular(14),
-            border: Border.all(color: Colors.white, width: 2),
-          ),
-          child: Text('🔥 x$_combo',
-              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w900, color: Colors.white)),
-        ),
-      ));
-    }
-    if (tier == 2) {
-      for (int k = 0; k < 3; k++) {
-        final ph = (bg * 3 + k * 0.33) % 1.0;
-        kids.add(Positioned(
-          left: g.bridgeLeft + (g.bridgeRight - g.bridgeLeft) * ((k + 0.5) / 3),
-          top: g.deckY - 30 - ph * 18,
-          child: Opacity(opacity: (1 - ph).clamp(0.0, 1.0), child: const Text('✨', style: TextStyle(fontSize: 14))),
-        ));
-      }
     }
 
     kids.add(Positioned(
@@ -3430,21 +3813,21 @@ class _GrammarBridgeGameState extends State<GrammarBridgeGame> with TickerProvid
     final v = i < _filled.length ? _filled[i] : null;
     final done = v != null;
     return Container(
-      margin: const EdgeInsets.symmetric(horizontal: 3),
-      padding: const EdgeInsets.symmetric(horizontal: 8),
-      constraints: const BoxConstraints(minWidth: 56),
+      margin: const EdgeInsets.symmetric(horizontal: 4),
+      padding: const EdgeInsets.symmetric(horizontal: 10),
+      constraints: const BoxConstraints(minWidth: 58),
       decoration: BoxDecoration(
-        color: done ? const Color(0xFFD5FBE6) : const Color(0xFFE6F4FF),
+        color: done ? const Color(0xFFD5FBE6) : const Color(0xFFDDE1EA),
         borderRadius: BorderRadius.circular(10),
-        border: Border(bottom: BorderSide(color: done ? _C.greenDk : _C.blueDk, width: 3)),
+        border: Border.all(color: done ? _C.greenDk : const Color(0xFFC3CAD9), width: 1.5),
       ),
       child: Text(
-        v ?? ' ? ',
+        v ?? '?',
         textAlign: TextAlign.center,
         style: TextStyle(
           fontSize: 22,
           fontWeight: FontWeight.w900,
-          color: done ? _C.greenDk : _C.blueDk,
+          color: done ? _C.greenDk : const Color(0xFF2B5BD7),
         ),
       ),
     );
@@ -3452,7 +3835,6 @@ class _GrammarBridgeGameState extends State<GrammarBridgeGame> with TickerProvid
 
   Widget _buildSentenceBoard() {
     final q = _q;
-    final th = _theme;
     final parts = q.sentence.split(RegExp(r'_{3,}'));
     final spans = <InlineSpan>[];
     for (int i = 0; i < parts.length; i++) {
@@ -3462,16 +3844,20 @@ class _GrammarBridgeGameState extends State<GrammarBridgeGame> with TickerProvid
       }
     }
     return Container(
-      margin: const EdgeInsets.fromLTRB(10, 0, 10, 6),
+      margin: EdgeInsets.fromLTRB(10, 0, 10, 12 * _s),
       padding: const EdgeInsets.all(3.5),
       decoration: BoxDecoration(
-        gradient: LinearGradient(colors: [th.accent, _C.pink, _C.yellow]),
+        gradient: const LinearGradient(
+          begin: Alignment.centerLeft,
+          end: Alignment.centerRight,
+          colors: [Color(0xFF4CCB7A), Color(0xFFFFC24A), Color(0xFFF59A3C)],
+        ),
         borderRadius: BorderRadius.circular(26),
-        boxShadow: [BoxShadow(color: th.accentDk.withAlpha(150), offset: const Offset(0, 4))],
+        boxShadow: const [BoxShadow(color: Color(0x33000000), blurRadius: 8, offset: Offset(0, 4))],
       ),
       child: Container(
         padding: EdgeInsets.fromLTRB(10, 8 * _s, 12, 8 * _s),
-        decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(23)),
+        decoration: BoxDecoration(color: const Color(0xFFFFF1DA), borderRadius: BorderRadius.circular(23)),
         child: Row(
           children: [
             TweenAnimationBuilder<double>(
@@ -3484,13 +3870,9 @@ class _GrammarBridgeGameState extends State<GrammarBridgeGame> with TickerProvid
                 width: 54 * _s,
                 height: 54 * _s,
                 alignment: Alignment.center,
-                decoration: BoxDecoration(
+                decoration: const BoxDecoration(
                   shape: BoxShape.circle,
-                  gradient: LinearGradient(
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                    colors: [th.skyBottom, th.skyTop],
-                  ),
+                  color: Color(0xFFF1DDBF),
                 ),
                 child: Text(q.emoji, style: TextStyle(fontSize: 31 * _s)),
               ),
@@ -3502,17 +3884,25 @@ class _GrammarBridgeGameState extends State<GrammarBridgeGame> with TickerProvid
                 children: [
                   Text.rich(
                     TextSpan(
-                      style: TextStyle(fontSize: 24 * _s, fontWeight: FontWeight.w800, color: _C.ink, height: 1.35),
+                      style: TextStyle(fontSize: 26 * _s, fontWeight: FontWeight.w900, color: const Color(0xFF1F2A6B), height: 1.35),
                       children: spans,
                     ),
                   ),
                   if (q.thai.isNotEmpty)
                     Padding(
                       padding: const EdgeInsets.only(top: 2),
-                      child: Text('💬 ${q.thai}',
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(fontSize: 13.5 * _s, fontWeight: FontWeight.w700, color: _C.inkSoft, height: 1.25)),
+                      child: Row(
+                        children: [
+                          Icon(Icons.chat_bubble_outline_rounded, size: 14 * _s, color: const Color(0xFF6B6F9A)),
+                          const SizedBox(width: 4),
+                          Expanded(
+                            child: Text(q.thai,
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(fontSize: 13.5 * _s, fontWeight: FontWeight.w700, color: const Color(0xFF6B6F9A), height: 1.25)),
+                          ),
+                        ],
+                      ),
                     ),
                 ],
               ),
@@ -3521,14 +3911,13 @@ class _GrammarBridgeGameState extends State<GrammarBridgeGame> with TickerProvid
             // ปุ่มลำโพง: แตะเพื่อฟังประโยคซ้ำ
             _Candy(
               onTap: () {
-                AudioHub.sfx('click.mp3');
                 _speakQuestion();
               },
-              a: th.accent,
-              b: th.accentDk,
-              edge: th.accentDk,
+              a: const Color(0xFF45D6D0),
+              b: const Color(0xFF1C9BC4),
+              edge: const Color(0xFF127A9C),
               radius: 16,
-              padding: EdgeInsets.all(8 * _s),
+              padding: EdgeInsets.all(7 * _s),
               child: Icon(Icons.volume_up_rounded, color: Colors.white, size: 24 * _s),
             ),
           ],
@@ -3542,47 +3931,66 @@ class _GrammarBridgeGameState extends State<GrammarBridgeGame> with TickerProvid
     Color border;
     Color fg;
     String text;
+    // ignore: unused_local_variable
+    IconData icon;
+    // ignore: unused_local_variable
+    Color iconColor;
     switch (_tipKind) {
       case 1:
         bg = const Color(0xFFE2FBEE);
         border = const Color(0xFF7BE0AA);
         fg = _C.greenDk;
-        text = '✅ $_tipText';
+        text = _tipText;
+        icon = Icons.check_circle_rounded;
+        iconColor = _C.greenDk;
         break;
       case 2:
         bg = const Color(0xFFFFF0DC);
         border = const Color(0xFFFFC272);
         fg = _C.orangeDk;
-        text = '🐼 ไม่เป็นไร ลองใหม่นะ! 💡 $_tipText';
+        text = 'ไม่เป็นไร ลองใหม่นะ $_tipText';
+        icon = Icons.lightbulb_rounded;
+        iconColor = const Color(0xFFFFB800);
         break;
       case 3:
         bg = const Color(0xFFFFFBD9);
         border = const Color(0xFFFFE066);
         fg = const Color(0xFF8D6E00);
-        text = '💡 $_tipText';
+        text = _tipText;
+        icon = Icons.lightbulb_rounded;
+        iconColor = const Color(0xFFFFB800);
         break;
       default:
         bg = Colors.white.withAlpha(225);
-        border = const Color(0xFF9ED2FF);
-        fg = _C.blueDk;
-        text = '👇 เลือกแผ่นไม้ที่ใช่ เพื่อสร้างสะพานให้ Bamboo!';
+        border = Colors.white;
+        fg = const Color(0xFF2B3A67);
+        text = 'เลือกแผ่นไม้ที่ใช่ เพื่อสร้างสะพานข้ามไป';
     }
     return AnimatedContainer(
       duration: const Duration(milliseconds: 250),
       width: double.infinity,
-      constraints: BoxConstraints(minHeight: 34 * _s),
-      margin: const EdgeInsets.fromLTRB(10, 0, 10, 6),
+      // สูงเท่ากับข้อความ 2 บรรทัด ฉากสะพานจะได้ไม่ขยับเมื่อข้อความเปลี่ยน
+      constraints: BoxConstraints(minHeight: 54 * _s),
+      margin: EdgeInsets.fromLTRB(10, 0, 10, 12 * _s),
       padding: EdgeInsets.symmetric(horizontal: 12, vertical: 6 * _s),
       decoration: BoxDecoration(
         color: bg,
-        borderRadius: BorderRadius.circular(18),
+        borderRadius: BorderRadius.circular(20),
         border: Border.all(color: border, width: 2),
       ),
-      child: Text(text,
-          textAlign: TextAlign.center,
-          maxLines: 2,
-          overflow: TextOverflow.ellipsis,
-          style: TextStyle(fontSize: 13.5 * _s, fontWeight: FontWeight.w900, color: fg, height: 1.3)),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          const SizedBox(width: 6),
+          Flexible(
+            child: Text(text,
+                textAlign: TextAlign.center,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(fontSize: 13.5 * _s, fontWeight: FontWeight.w800, color: fg, height: 1.3)),
+          ),
+        ],
+      ),
     );
   }
 
@@ -3594,9 +4002,12 @@ class _GrammarBridgeGameState extends State<GrammarBridgeGame> with TickerProvid
       padding: const EdgeInsets.symmetric(horizontal: 10),
       child: LayoutBuilder(
         builder: (context, c) {
-          final itemW = (c.maxWidth - 10) / 2;
+          // 3 choices go in one row (not 2 + 1); otherwise two per row.
+          final columns = _opts.length == 3 ? 3 : 2;
+          const gap = 10.0;
+          final itemW = (c.maxWidth - gap * (columns - 1)) / columns;
           return Wrap(
-            spacing: 10,
+            spacing: gap,
             runSpacing: 8 * _s,
             alignment: WrapAlignment.center,
             children: List.generate(_opts.length, (i) {
@@ -3604,7 +4015,7 @@ class _GrammarBridgeGameState extends State<GrammarBridgeGame> with TickerProvid
               final gone = _removed.contains(option) || placed;
               return SizedBox(
                 width: itemW,
-                height: 64 * _s,
+                height: 54 * _s,
                 child: AnimatedOpacity(
                   opacity: gone ? 0.0 : 1.0,
                   duration: const Duration(milliseconds: 250),
@@ -3622,7 +4033,7 @@ class _GrammarBridgeGameState extends State<GrammarBridgeGame> with TickerProvid
                       child: _PlankButton(
                         text: option,
                         colorIndex: i,
-                        fontSize: (pair ? 19 : 28) * _s,
+                        fontSize: (pair ? 17 : (_opts.length == 3 ? 22 : 24)) * _s,
                         onTap: () => _handleAnswer(option),
                       ),
                     ),
@@ -3637,7 +4048,8 @@ class _GrammarBridgeGameState extends State<GrammarBridgeGame> with TickerProvid
   }
 
   Widget _itemButton({
-    required String emoji,
+    required IconData icon,
+    required Color iconColor,
     required String label,
     required int count,
     required bool active,
@@ -3649,26 +4061,26 @@ class _GrammarBridgeGameState extends State<GrammarBridgeGame> with TickerProvid
       child: Opacity(
         opacity: (usable || active) ? 1.0 : 0.5,
         child: Container(
-          padding: EdgeInsets.symmetric(horizontal: 14, vertical: 8 * _s),
+          padding: EdgeInsets.symmetric(horizontal: 12, vertical: 4 * _s),
           decoration: BoxDecoration(
-            color: active ? const Color(0xFFFFF6CC) : Colors.white,
+            color: active ? const Color(0xFFFFF6CC) : const Color(0xE6FFFFFF),
             borderRadius: BorderRadius.circular(28),
-            border: Border.all(color: active ? _C.yellowDk : const Color(0xFF9ED2FF), width: 3),
-            boxShadow: const [BoxShadow(color: Color(0x22000000), blurRadius: 5, offset: Offset(0, 3))],
+            border: Border.all(color: active ? _C.yellowDk : Colors.white, width: 2.5),
+            boxShadow: const [BoxShadow(color: Color(0x22000000), blurRadius: 6, offset: Offset(0, 3))],
           ),
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Text(emoji, style: TextStyle(fontSize: 20 * _s)),
+              Icon(icon, color: iconColor, size: 22 * _s),
               const SizedBox(width: 6),
-              Text(active ? 'พร้อมใช้!' : label,
-                  style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w900, color: _C.ink)),
+              Text(active ? 'พร้อมใช้ !' : label,
+                  style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w900, color: Color(0xFF1F2A6B))),
               const SizedBox(width: 8),
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 2),
                 decoration: BoxDecoration(
-                  gradient: const LinearGradient(colors: [_C.blue, _C.purple]),
-                  borderRadius: BorderRadius.circular(10),
+                  gradient: const LinearGradient(colors: [Color(0xFF4DA3FF), Color(0xFF7E55EE)]),
+                  borderRadius: BorderRadius.circular(12),
                 ),
                 child: Text('x$count',
                     style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w900)),
@@ -3682,17 +4094,311 @@ class _GrammarBridgeGameState extends State<GrammarBridgeGame> with TickerProvid
 
   Widget _buildHelperBar() {
     return Padding(
-      padding: EdgeInsets.only(top: 8 * _s),
+      padding: EdgeInsets.only(top: 4 * _s),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          _itemButton(emoji: '💡', label: 'ช่วยคิด', count: _hints, active: _isHintUsed, onTap: _useHint),
+          _itemButton(
+              icon: Icons.lightbulb_rounded,
+              iconColor: const Color(0xFFFFC21A),
+              label: 'ช่วยคิด',
+              count: GameProgress.hints,
+              active: _isHintUsed,
+              onTap: _useHint),
           const SizedBox(width: 12),
-          _itemButton(emoji: '🛡️', label: 'ตาข่ายกันตก', count: _nets, active: _isSafetyNetActive, onTap: _useNet),
+          _itemButton(
+              icon: Icons.shield_rounded,
+              iconColor: const Color(0xFF7C8DB0),
+              label: 'ตาข่ายกันตก',
+              count: GameProgress.nets,
+              active: _isSafetyNetActive,
+              onTap: _useNet),
         ],
       ),
     );
   }
+
+  // ignore: unused_element
+  Widget _moodIcon(String m) {
+    IconData i;
+    Color c;
+    switch (m) {
+      case '😄':
+        i = Icons.sentiment_very_satisfied_rounded;
+        c = const Color(0xFFFFB800);
+        break;
+      case '😅':
+        i = Icons.sentiment_neutral_rounded;
+        c = const Color(0xFFFF9800);
+        break;
+      case '🛡️':
+        i = Icons.shield_rounded;
+        c = const Color(0xFF26C6DA);
+        break;
+      case '😱':
+      case '😵':
+        i = Icons.sentiment_very_dissatisfied_rounded;
+        c = const Color(0xFFFF5C7A);
+        break;
+      default:
+        i = Icons.celebration_rounded;
+        c = const Color(0xFFFF5FA2);
+    }
+    return Container(
+      decoration: const BoxDecoration(color: Colors.white, shape: BoxShape.circle),
+      child: Icon(i, size: 24, color: c),
+    );
+  }
+
+  Widget _giftBox() {
+    const red = Color(0xFFFF5C7A);
+    const redDk = Color(0xFFD42A55);
+    return SizedBox(
+      width: 34,
+      height: 34,
+      child: Stack(
+        children: [
+          Positioned(
+            left: 3, right: 3, bottom: 0, height: 22,
+            child: DecoratedBox(
+              decoration: BoxDecoration(color: red, borderRadius: BorderRadius.circular(4), border: Border.all(color: redDk, width: 1.5)),
+            ),
+          ),
+          Positioned(
+            left: 0, right: 0, top: 6, height: 10,
+            child: DecoratedBox(
+              decoration: BoxDecoration(color: const Color(0xFFFF8AA0), borderRadius: BorderRadius.circular(4), border: Border.all(color: redDk, width: 1.5)),
+            ),
+          ),
+          Positioned(left: 14, width: 6, top: 6, bottom: 0, child: const ColoredBox(color: Color(0xFFFFD23F))),
+          Positioned(top: 0, left: 8, width: 9, height: 9,
+              child: DecoratedBox(decoration: BoxDecoration(shape: BoxShape.circle, border: Border.all(color: const Color(0xFFE5A800), width: 2)))),
+          Positioned(top: 0, left: 17, width: 9, height: 9,
+              child: DecoratedBox(decoration: BoxDecoration(shape: BoxShape.circle, border: Border.all(color: const Color(0xFFE5A800), width: 2)))),
+        ],
+      ),
+    );
+  }
+}
+
+/// ดวงอาทิตย์หน้ายิ้ม (รัศมีหมุนช้าๆ)
+class _SunPainter extends CustomPainter {
+  final double angle;
+  const _SunPainter(this.angle);
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final c = size.center(Offset.zero);
+    final r = size.width * 0.28;
+    final ray = Paint()..color = const Color(0xFFFFC21A);
+    for (int i = 0; i < 12; i++) {
+      canvas.save();
+      canvas.translate(c.dx, c.dy);
+      canvas.rotate(angle + i * pi / 6);
+      canvas.drawRRect(
+        RRect.fromRectAndRadius(Rect.fromLTWH(r + 3, -3.5, size.width * 0.19, 7), const Radius.circular(3.5)),
+        ray,
+      );
+      canvas.restore();
+    }
+    canvas.drawCircle(
+      c,
+      r,
+      Paint()
+        ..shader = const RadialGradient(colors: [Color(0xFFFFEE88), Color(0xFFFFC21A)]).createShader(Rect.fromCircle(center: c, radius: r)),
+    );
+    canvas.drawCircle(c, r, Paint()..color = const Color(0xFFFFA800)..style = PaintingStyle.stroke..strokeWidth = 1.5);
+    final eye = Paint()..color = const Color(0xFF6B3A14);
+    canvas.drawOval(Rect.fromCenter(center: c + Offset(-r * 0.36, -r * 0.12), width: 3.4, height: 5), eye);
+    canvas.drawOval(Rect.fromCenter(center: c + Offset(r * 0.36, -r * 0.12), width: 3.4, height: 5), eye);
+    final cheek = Paint()..color = const Color(0x8CF58A6B);
+    canvas.drawCircle(c + Offset(-r * 0.58, r * 0.3), 3.2, cheek);
+    canvas.drawCircle(c + Offset(r * 0.58, r * 0.3), 3.2, cheek);
+    canvas.drawArc(
+      Rect.fromCenter(center: c + Offset(0, r * 0.12), width: r * 0.9, height: r * 0.7),
+      0.25,
+      pi - 0.5,
+      false,
+      Paint()..color = const Color(0xFF6B3A14)..style = PaintingStyle.stroke..strokeWidth = 2..strokeCap = StrokeCap.round,
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant _SunPainter old) => old.angle != angle;
+}
+
+class _CloudPainter extends CustomPainter {
+  const _CloudPainter();
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final s = size.width / 100;
+    void blob(Paint p, double dy) {
+      canvas.drawCircle(Offset(24 * s, 26 * s + dy), 12 * s, p);
+      canvas.drawCircle(Offset(42 * s, 18 * s + dy), 16 * s, p);
+      canvas.drawCircle(Offset(62 * s, 16 * s + dy), 18 * s, p);
+      canvas.drawCircle(Offset(80 * s, 26 * s + dy), 12 * s, p);
+      canvas.drawRRect(RRect.fromLTRBR(10 * s, 24 * s + dy, 92 * s, 38 * s + dy, Radius.circular(7 * s)), p);
+    }
+
+    blob(Paint()..color = const Color(0x338FB4E8), 3 * s);
+    blob(Paint()..color = const Color(0xF5FFFFFF), 0);
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter old) => false;
+}
+
+class _BirdPainter extends CustomPainter {
+  const _BirdPainter();
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final w = size.width;
+    final h = size.height;
+    final body = Paint()..color = const Color(0xFF3D8FE0);
+    canvas.drawPath(
+      Path()
+        ..moveTo(0, h * 0.35)
+        ..lineTo(w * 0.28, h * 0.5)
+        ..lineTo(w * 0.28, h * 0.75)
+        ..close(),
+      body,
+    );
+    canvas.drawOval(Rect.fromLTWH(w * 0.2, h * 0.2, w * 0.6, h * 0.65), body);
+    canvas.drawCircle(Offset(w * 0.72, h * 0.3), h * 0.26, body);
+    canvas.drawPath(
+      Path()
+        ..moveTo(w * 0.9, h * 0.22)
+        ..lineTo(w, h * 0.32)
+        ..lineTo(w * 0.9, h * 0.4)
+        ..close(),
+      Paint()..color = const Color(0xFFFFA52E),
+    );
+    canvas.drawOval(Rect.fromLTWH(w * 0.36, h * 0.42, w * 0.3, h * 0.28), Paint()..color = const Color(0xFF86C2FF));
+    canvas.drawCircle(Offset(w * 0.75, h * 0.26), 1.4, Paint()..color = Colors.white);
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter old) => false;
+}
+
+class _TreePainter extends CustomPainter {
+  final Color body;
+  final Color light;
+  const _TreePainter(this.body, this.light);
+
+  @override
+  void paint(Canvas c, Size size) {
+    final s = size.height / 96;
+    final base = Offset(size.width / 2, size.height);
+    c.drawRect(Rect.fromLTWH(base.dx - 4 * s, base.dy - 14 * s, 8 * s, 16 * s), Paint()..color = const Color(0xFF7A4B26));
+    for (int i = 0; i < 3; i++) {
+      final bottom = base.dy - 10 * s - i * 22 * s;
+      final tip = bottom - 40 * s;
+      final hw = (30 - i * 6) * s;
+      c.drawPath(
+        Path()
+          ..moveTo(base.dx, tip)
+          ..lineTo(base.dx + hw, bottom)
+          ..lineTo(base.dx - hw, bottom)
+          ..close(),
+        Paint()..color = light,
+      );
+      c.drawPath(
+        Path()
+          ..moveTo(base.dx, tip)
+          ..lineTo(base.dx + hw, bottom)
+          ..lineTo(base.dx, bottom)
+          ..close(),
+        Paint()..color = body,
+      );
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter old) => false;
+}
+
+/// ลายใบไม้และประกายจางๆ ที่พื้นหลัง
+class _LeafBackdropPainter extends CustomPainter {
+  const _LeafBackdropPainter();
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final w = size.width;
+    final h = size.height;
+    final p = Paint()..color = Colors.white.withAlpha(95);
+    void leaf(Offset base, double len, double ang) {
+      canvas.save();
+      canvas.translate(base.dx, base.dy);
+      canvas.rotate(ang);
+      canvas.drawPath(
+        Path()
+          ..moveTo(0, 0)
+          ..quadraticBezierTo(len * 0.35, -len * 0.26, len, 0)
+          ..quadraticBezierTo(len * 0.35, len * 0.26, 0, 0),
+        p,
+      );
+      canvas.restore();
+    }
+
+    void sparkle(Offset o, double r) {
+      canvas.drawPath(
+        Path()
+          ..moveTo(o.dx, o.dy - r)
+          ..quadraticBezierTo(o.dx, o.dy, o.dx + r, o.dy)
+          ..quadraticBezierTo(o.dx, o.dy, o.dx, o.dy + r)
+          ..quadraticBezierTo(o.dx, o.dy, o.dx - r, o.dy)
+          ..quadraticBezierTo(o.dx, o.dy, o.dx, o.dy - r),
+        p,
+      );
+    }
+
+    leaf(Offset(10, h), 130, -1.15);
+    leaf(Offset(34, h), 110, -0.75);
+    leaf(Offset(-6, h), 100, -1.5);
+    leaf(Offset(w - 10, h), 130, -pi + 1.15);
+    leaf(Offset(w - 34, h), 110, -pi + 0.75);
+    leaf(Offset(w + 6, h), 100, -pi + 1.5);
+    leaf(Offset(0, h * 0.7), 80, -0.9);
+    leaf(Offset(w, h * 0.7), 80, -pi + 0.9);
+    sparkle(Offset(w * 0.2, h * 0.8), 8);
+    sparkle(Offset(w * 0.86, h * 0.76), 7);
+    sparkle(Offset(w * 0.1, h * 0.6), 6);
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter old) => false;
+}
+
+/// เส้นลายไม้บนแผ่นไม้ตัวเลือก
+class _GrainPainter extends CustomPainter {
+  const _GrainPainter();
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final dark = Paint()
+      ..color = const Color(0x1F000000)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.6
+      ..strokeCap = StrokeCap.round;
+    final light = Paint()
+      ..color = const Color(0x33FFFFFF)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.6
+      ..strokeCap = StrokeCap.round;
+    for (int i = 0; i < 3; i++) {
+      final y = size.height * (0.3 + i * 0.22);
+      final path = Path()..moveTo(size.width * 0.08, y);
+      path.quadraticBezierTo(size.width * 0.3, y - 3, size.width * 0.5, y);
+      path.quadraticBezierTo(size.width * 0.72, y + 3, size.width * 0.92, y - 1);
+      canvas.drawPath(path, i.isEven ? dark : light);
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter old) => false;
 }
 
 // ==========================================
@@ -3734,8 +4440,8 @@ class _PlankButtonState extends State<_PlankButton> {
         child: Container(
           decoration: BoxDecoration(
             gradient: LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter, colors: [c[0], c[1]]),
-            borderRadius: BorderRadius.circular(28),
-            border: Border.all(color: Colors.white, width: 3.5),
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: const Color(0xB3FFFFFF), width: 2.5),
             boxShadow: [
               BoxShadow(color: c[2], offset: const Offset(0, 6)),
               const BoxShadow(color: Color(0x22000000), blurRadius: 8, offset: Offset(0, 8)),
@@ -3757,8 +4463,7 @@ class _PlankButtonState extends State<_PlankButton> {
                   ),
                 ),
               ),
-              Positioned(left: 9, child: _nail()),
-              Positioned(right: 9, child: _nail()),
+              const Positioned.fill(child: CustomPaint(painter: _GrainPainter())),
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 22),
                 child: FittedBox(
@@ -3781,6 +4486,7 @@ class _PlankButtonState extends State<_PlankButton> {
     );
   }
 
+  // ignore: unused_element
   Widget _nail() => Container(
         width: 7,
         height: 7,
@@ -3792,7 +4498,8 @@ class _PlankButtonState extends State<_PlankButton> {
 /// ฟัง AvatarProfile โดยตรง ถ้าไปเปลี่ยนชุด/ทรงผมแล้วกลับมาเล่นต่อ จะอัปเดตทันที
 class _UserAvatarToken extends StatelessWidget {
   final Color accent;
-  const _UserAvatarToken({required this.accent});
+  final double size;
+  const _UserAvatarToken({required this.accent, this.size = 46});
 
   @override
   Widget build(BuildContext context) {
@@ -3805,8 +4512,8 @@ class _UserAvatarToken extends StatelessWidget {
         final skin = kSkinTones[p.skinIndex.clamp(0, kSkinTones.length - 1)];
         final hair = kHairColors[p.hairColorIndex.clamp(0, kHairColors.length - 1)];
         return Container(
-          width: 46,
-          height: 46,
+          width: size,
+          height: size,
           decoration: BoxDecoration(
             shape: BoxShape.circle,
             color: Colors.white.withAlpha(235),
@@ -3864,7 +4571,7 @@ class _CoinPill extends StatelessWidget {
         border: Border.all(color: const Color(0xFFFFD43B), width: 2),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.12),
+            color: Colors.black.withValues(alpha: 0.12),
             blurRadius: 6,
             offset: const Offset(0, 2),
           ),
@@ -3940,26 +4647,14 @@ class _GameHeaderBar extends StatelessWidget {
       color: color,
       child: SafeArea(
         bottom: false,
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-          child: Row(
+        child: SizedBox(
+          height: 60,
+          child: Stack(
+            alignment: Alignment.center,
             children: [
-              if (showBack)
-                InkWell(
-                  borderRadius: BorderRadius.circular(10),
-                  onTap: onBack ?? () => Navigator.maybePop(context),
-                  child: const Padding(
-                    padding: EdgeInsets.all(6),
-                    child: Icon(
-                      Icons.arrow_back_ios_new_rounded,
-                      color: Colors.white,
-                      size: 22,
-                    ),
-                  ),
-                )
-              else
-                const SizedBox(width: 34),
-              Expanded(
+              // ชื่อหน้าอยู่กึ่งกลางจอเสมอ
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 64),
                 child: FittedBox(
                   fit: BoxFit.scaleDown,
                   child: Text(
@@ -3968,14 +4663,28 @@ class _GameHeaderBar extends StatelessWidget {
                     textAlign: TextAlign.center,
                     style: const TextStyle(
                       color: Colors.white,
-                      fontSize: 25,
+                      fontSize: 28,
                       fontWeight: FontWeight.w900,
-                      letterSpacing: 0.5,
                     ),
                   ),
                 ),
               ),
-              const SizedBox(width: 44),
+              if (showBack)
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: InkWell(
+                    customBorder: const CircleBorder(),
+                    onTap: onBack ?? () => Navigator.maybePop(context),
+                    child: const Padding(
+                      padding: EdgeInsets.fromLTRB(20, 10, 16, 10),
+                      child: Icon(
+                        Icons.arrow_back_ios_new_rounded,
+                        color: Colors.white,
+                        size: 26,
+                      ),
+                    ),
+                  ),
+                ),
             ],
           ),
         ),

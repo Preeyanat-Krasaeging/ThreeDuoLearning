@@ -1,4 +1,4 @@
-# threeduo_learning
+# three_duo_learning
 
 A new Flutter project.
 

@@ -1,6 +1,6 @@
 {
-    "name": "threeduo_learning",
-    "short_name": "threeduo_learning",
+    "name": "three_duo_learning",
+    "short_name": "three_duo_learning",
     "start_url": ".",
     "display": "standalone",
     "background_color": "#0175C2",

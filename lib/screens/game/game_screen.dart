@@ -1,9 +1,7 @@
 import 'package:flutter/material.dart';
 
 // Import หน้าเกมเดิม
-import 'flashcards/flashcard_category_screen.dart';
 import 'guess/guess_screen.dart';
-import 'sentence/sentence_screen.dart';
 import 'First Letter Game/lettergame.dart';
 import 'AnimalSound/animalsound.dart';
 import 'Alphabet Train/alphabet_train.dart';
@@ -31,15 +29,6 @@ class _GameScreenState extends State<GameScreen> {
 
   final List<Map<String, dynamic>> gameItems = const [
     {
-      'title': 'Flashcards',
-      'label': 'แฟลชการ์ด',
-      'subtitle': 'พลิกการ์ดจำคำ',
-      'imagePath': 'assets/images/Background/gameflashcard.png',
-      'icon': Icons.style_rounded,
-      'bgGradient': [Color(0xFFFB923C), Color(0xFFEA580C)],
-      'borderDark': Color(0xFF9A3412),
-    },
-    {
       'title': 'Guess',
       'label': 'ทายภาพ',
       'subtitle': 'นี่คือภาพอะไรนะ',
@@ -47,15 +36,6 @@ class _GameScreenState extends State<GameScreen> {
       'icon': Icons.image_search_rounded,
       'bgGradient': [Color(0xFF4ADE80), Color(0xFF16A34A)],
       'borderDark': Color(0xFF14532D),
-    },
-    {
-      'title': 'Sentence',
-      'label': 'เรียงประโยค',
-      'subtitle': 'ต่อคำให้เป็นประโยค',
-      'imagePath': 'assets/images/Background/gamesentence.png',
-      'icon': Icons.format_list_numbered_rounded,
-      'bgGradient': [Color(0xFFA855F7), Color(0xFF7E22CE)],
-      'borderDark': Color(0xFF581C87),
     },
     {
       'title': 'First Letter',
@@ -143,22 +123,10 @@ class _GameScreenState extends State<GameScreen> {
 
   void _navigateToGame(String title) {
     switch (title) {
-      case 'Flashcards':
-        Navigator.push(
-          context,
-          MaterialPageRoute(builder: (_) => const FlashcardCategoryScreen()),
-        );
-        break;
       case 'Guess':
         Navigator.push(
           context,
           MaterialPageRoute(builder: (_) => const GuessScreen()),
-        );
-        break;
-      case 'Sentence':
-        Navigator.push(
-          context,
-          MaterialPageRoute(builder: (_) => const SentenceScreen()),
         );
         break;
       case 'First Letter':
@@ -237,7 +205,7 @@ class _GameScreenState extends State<GameScreen> {
           borderRadius: BorderRadius.circular(34),
           boxShadow: [
             BoxShadow(
-              color: borderDark.withOpacity(0.35),
+              color: borderDark.withValues(alpha: 0.35),
               offset: const Offset(0, 5),
               blurRadius: 4,
             ),
@@ -272,7 +240,7 @@ class _GameScreenState extends State<GameScreen> {
                       borderRadius: const BorderRadius.vertical(
                         bottom: Radius.elliptical(250, 45),
                       ),
-                      color: Colors.white.withOpacity(0.2),
+                      color: Colors.white.withValues(alpha: 0.2),
                     ),
                   ),
                 ),
@@ -307,7 +275,7 @@ class _GameScreenState extends State<GameScreen> {
                               style: TextStyle(
                                 fontSize: 15,
                                 fontWeight: FontWeight.w700,
-                                color: Colors.white.withOpacity(0.95),
+                                color: Colors.white.withValues(alpha: 0.95),
                               ),
                             ),
                           ],

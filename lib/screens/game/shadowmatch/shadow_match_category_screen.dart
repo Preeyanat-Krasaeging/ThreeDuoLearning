@@ -1,99 +1,206 @@
 import 'package:flutter/material.dart';
+import '../../../widgets/coin_balance_chip.dart';
+import '../../../services/shadow_progress_service.dart';
+import 'shadow_match_data.dart';
 import 'shadow_match_screen.dart';
 
-class ShadowMatchCategoryItem {
-  final String key;
-  final String titleTh;
-  final String imagePath;
-  final Color themeColor;
-  final Color shadowColor;
-
-  const ShadowMatchCategoryItem({
-    required this.key,
-    required this.titleTh,
-    required this.imagePath,
-    required this.themeColor,
-    required this.shadowColor,
-  });
-}
-
-class ShadowMatchCategoryScreen extends StatelessWidget {
+class ShadowMatchCategoryScreen extends StatefulWidget {
   const ShadowMatchCategoryScreen({super.key});
 
-  final List<ShadowMatchCategoryItem> categories = const [
-    // 1. สัตว์
-    ShadowMatchCategoryItem(
-      key: 'animal',
-      titleTh: 'สัตว์',
-      imagePath: 'assets/images/Background/shadowanimal.png',
-      themeColor: Color(0xFFC026D3),
-      shadowColor: Color(0xFF6B1574),
-    ),
-    // 2. ร่างกาย
-    ShadowMatchCategoryItem(
-      key: 'body',
-      titleTh: 'ร่างกาย',
-      imagePath: 'assets/images/Background/shadowbody.png',
-      themeColor: Color(0xFFF59E0B),
-      shadowColor: Color(0xFF9E4700),
-    ),
-    // 3. เสื้อผ้า
-    ShadowMatchCategoryItem(
-      key: 'clothing',
-      titleTh: 'เสื้อผ้า',
-      imagePath: 'assets/images/Background/shadowclothes.png',
-      themeColor: Color(0xFFEC4899),
-      shadowColor: Color(0xFF93174E),
-    ),
-    // 4. กิจวัตรประจำวัน
-    ShadowMatchCategoryItem(
-      key: 'daily_routine',
-      titleTh: 'กิจวัตรประจำวัน',
-      imagePath: 'assets/images/Background/shadowroutine.png',
-      themeColor: Color(0xFF8B5CF6),
-      shadowColor: Color(0xFF551EB3),
-    ),
-    // 5. อาหาร
-    ShadowMatchCategoryItem(
-      key: 'food',
-      titleTh: 'อาหาร',
-      imagePath: 'assets/images/Background/shadowfood.png',
-      themeColor: Color(0xFF10B981),
-      shadowColor: Color(0xFF045E44),
-    ),
-    // 6. ผลไม้
-    ShadowMatchCategoryItem(
-      key: 'fruit',
-      titleTh: 'ผลไม้',
-      imagePath: 'assets/images/Background/shadowfruit.png',
-      themeColor: Color(0xFFEF4444),
-      shadowColor: Color(0xFF8D1818),
-    ),
-    // 7. บ้าน
-    ShadowMatchCategoryItem(
-      key: 'home',
-      titleTh: 'บ้าน',
-      imagePath: 'assets/images/Background/shadowhouse.png',
-      themeColor: Color(0xFF06B6D4),
-      shadowColor: Color(0xFF115569),
-    ),
-    // 8. กีฬา
-    ShadowMatchCategoryItem(
-      key: 'sport',
-      titleTh: 'กีฬา',
-      imagePath: 'assets/images/Background/shadowsport.png',
-      themeColor: Color(0xFF3B82F6),
-      shadowColor: Color(0xFF183B9E),
-    ),
-    // 9. ยานพาหนะ
-    ShadowMatchCategoryItem(
-      key: 'vehicle',
-      titleTh: 'ยานพาหนะ',
-      imagePath: 'assets/images/guess/Vehicles/Car.png',
-      themeColor: Color(0xFFF97316),
-      shadowColor: Color(0xFF8D310A),
-    ),
-  ];
+  @override
+  State<ShadowMatchCategoryScreen> createState() =>
+      _ShadowMatchCategoryScreenState();
+}
+
+class _ShadowMatchCategoryScreenState extends State<ShadowMatchCategoryScreen> {
+  static const List<ShadowCategory> categories = shadowCategories;
+
+  /// For the badges: unfinished games and finished categories.
+  Map<String, ({int stage, int stages})> _unfinished = {};
+  Map<String, int> _best = {};
+
+  @override
+  void initState() {
+    super.initState();
+    _loadBadges();
+    // Progress saved on the server (e.g. another phone), then refresh.
+    ShadowProgress.sync().then((_) => _loadBadges());
+    ShadowCoins.flush(); // coins of matches made while offline
+  }
+
+  Map<String, Set<String>> get _idsByCategory => {
+    for (final c in categories) c.key: c.items.map((i) => i.id).toSet(),
+  };
+
+  Future<void> _loadBadges() async {
+    final unfinished = await ShadowProgress.unfinished(_idsByCategory);
+    final best = await ShadowProgress.bestScores();
+    if (!mounted) return;
+    setState(() {
+      _unfinished = unfinished;
+      _best = best;
+    });
+  }
+
+  Future<void> _open(ShadowCategory category) async {
+    final saved = await ShadowProgress.load(category.key, _idsByCategory[category.key]!);
+    if (!mounted) return;
+    ShadowRound? resume;
+    if (saved != null) {
+      final choice = await _askResume(category, saved);
+      if (!mounted || choice == null) return;
+      if (choice) {
+        resume = saved;
+      } else {
+        await ShadowProgress.clear(category.key);
+      }
+    }
+    if (!mounted) return;
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => ShadowMatchScreen(category: category, resume: resume),
+      ),
+    );
+    _loadBadges();
+  }
+
+  Future<bool?> _askResume(ShadowCategory category, ShadowRound saved) {
+    final color = category.cardColor;
+    return showDialog<bool>(
+      context: context,
+      builder:
+          (dialogContext) => AlertDialog(
+            backgroundColor: Colors.white,
+            surfaceTintColor: Colors.transparent,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(28),
+              side: BorderSide(color: color.withValues(alpha: 0.35), width: 2.5),
+            ),
+            title: Row(
+              children: [
+                Icon(Icons.play_circle_fill_rounded, color: color, size: 28),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'หมวด${category.titleTh}',
+                    style: const TextStyle(
+                      fontSize: 20,
+                      fontWeight: FontWeight.w900,
+                      color: Color(0xFF1E293B),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            content: Text(
+              'เล่นค้างไว้ที่ด่าน ${saved.roundIndex + 1} จาก ${saved.stages}\n'
+              'จับคู่ไปแล้ว ${saved.matchedTotal} คู่ จะเล่นต่อเลยไหม ?',
+              style: const TextStyle(
+                fontSize: 15.5,
+                height: 1.5,
+                fontWeight: FontWeight.w600,
+                color: Color(0xFF334155),
+              ),
+            ),
+            actionsPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+            actions: [
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton(
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: color,
+                        side: BorderSide(color: color.withValues(alpha: 0.5), width: 2),
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                      ),
+                      onPressed: () => Navigator.pop(dialogContext, false),
+                      child: const Text(
+                        'เริ่มใหม่',
+                        style: TextStyle(fontWeight: FontWeight.w900, fontSize: 15),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: ElevatedButton(
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: color,
+                        foregroundColor: Colors.white,
+                        elevation: 0,
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                      ),
+                      onPressed: () => Navigator.pop(dialogContext, true),
+                      child: const Text(
+                        'เล่นต่อ',
+                        style: TextStyle(fontWeight: FontWeight.w900, fontSize: 15),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+    );
+  }
+
+  /// "เล่นต่อ 3/8" for an unfinished game, a green tick when finished.
+  Widget? _badge(ShadowCategory category) {
+    final unfinished = _unfinished[category.key];
+    if (unfinished != null) {
+      return Container(
+        padding: const EdgeInsets.fromLTRB(5, 3, 8, 3),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(12),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.15),
+              blurRadius: 3,
+              offset: const Offset(0, 1.5),
+            ),
+          ],
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.play_arrow_rounded, size: 14, color: Color(0xFFF59E0B)),
+            const SizedBox(width: 2),
+            Text(
+              'เล่นต่อ ${unfinished.stage} / ${unfinished.stages}',
+              style: const TextStyle(
+                fontSize: 11,
+                fontWeight: FontWeight.w900,
+                color: Color(0xFFF59E0B),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+    if (_best.containsKey(category.key)) {
+      return Container(
+        width: 26,
+        height: 26,
+        decoration: BoxDecoration(
+          color: const Color(0xFF22C55E),
+          shape: BoxShape.circle,
+          border: Border.all(color: Colors.white, width: 2.5),
+          boxShadow: const [
+            BoxShadow(color: Colors.black26, blurRadius: 3, offset: Offset(0, 1.5)),
+          ],
+        ),
+        child: const Icon(Icons.check_rounded, size: 16, color: Colors.white),
+      );
+    }
+    return null;
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -115,7 +222,6 @@ class ShadowMatchCategoryScreen extends StatelessWidget {
         ),
         child: Column(
           children: [
-            // 1. Header Bar ด้านบน
             Container(
               color: topBarColor,
               child: SafeArea(
@@ -136,6 +242,8 @@ class ShadowMatchCategoryScreen extends StatelessWidget {
                           ),
                         ),
                       ),
+                      // Same width as the coin chip on the right, so the title stays centred.
+                      const SizedBox(width: CoinBalanceChip.width - 34),
                       const Expanded(
                         child: Text(
                           'จับคู่เงา',
@@ -148,24 +256,22 @@ class ShadowMatchCategoryScreen extends StatelessWidget {
                           ),
                         ),
                       ),
-                      const SizedBox(width: 44),
+                      const CoinBalanceChip(),
                     ],
                   ),
                 ),
               ),
             ),
-
-            // 2. เนื้อหาเลื่อนแบบเรียบสนิท
             Expanded(
               child: CustomScrollView(
                 physics: const ClampingScrollPhysics(),
                 slivers: [
-                  SliverToBoxAdapter(
+                  const SliverToBoxAdapter(
                     child: Padding(
-                      padding: const EdgeInsets.fromLTRB(20, 12, 20, 8),
+                      padding: EdgeInsets.fromLTRB(20, 12, 20, 8),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
-                        children: const [
+                        children: [
                           Text(
                             'จับคู่เงาแสนสนุก',
                             style: TextStyle(
@@ -189,8 +295,6 @@ class ShadowMatchCategoryScreen extends StatelessWidget {
                       ),
                     ),
                   ),
-
-                  // ตารางแสดงการ์ดหมวดหมู่
                   SliverPadding(
                     padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
                     sliver: SliverGrid(
@@ -205,17 +309,8 @@ class ShadowMatchCategoryScreen extends StatelessWidget {
                           final cat = categories[index];
                           return _KidsLeafCard(
                             category: cat,
-                            onTap: () {
-                              // ✅ ส่ง categoryTitle: cat.titleTh ไปที่หน้าเกม (หายแดงทันที และเปิดตรงหมวดแน่นอน)
-                              Navigator.push(
-                                context,
-                                MaterialPageRoute(
-                                  builder: (context) => ShadowMatchScreen(
-                                    categoryTitle: cat.titleTh,
-                                  ),
-                                ),
-                              );
-                            },
+                            badge: _badge(cat),
+                            onTap: () => _open(cat),
                           );
                         },
                         childCount: categories.length,
@@ -233,12 +328,14 @@ class ShadowMatchCategoryScreen extends StatelessWidget {
 }
 
 class _KidsLeafCard extends StatelessWidget {
-  final ShadowMatchCategoryItem category;
+  final ShadowCategory category;
+  final Widget? badge;
   final VoidCallback onTap;
 
   const _KidsLeafCard({
     required this.category,
     required this.onTap,
+    this.badge,
   });
 
   static const BorderRadius outerRadius = BorderRadius.only(
@@ -267,7 +364,7 @@ class _KidsLeafCard extends StatelessWidget {
           border: Border.all(color: Colors.white, width: 3.0),
           boxShadow: [
             BoxShadow(
-              color: category.shadowColor,
+              color: category.cardShadowColor,
               offset: const Offset(0, 5.5),
               blurRadius: 0,
             ),
@@ -278,7 +375,7 @@ class _KidsLeafCard extends StatelessWidget {
           child: Stack(
             children: [
               Positioned.fill(
-                child: Container(color: category.themeColor),
+                child: Container(color: category.cardColor),
               ),
               Positioned.fill(
                 child: Padding(
@@ -292,7 +389,7 @@ class _KidsLeafCard extends StatelessWidget {
                         bottomRight: Radius.circular(10),
                       ),
                       border: Border.all(
-                        color: Colors.white.withOpacity(0.55),
+                        color: Colors.white.withValues(alpha: 0.55),
                         width: 1.6,
                       ),
                     ),
@@ -304,7 +401,7 @@ class _KidsLeafCard extends StatelessWidget {
                   padding: const EdgeInsets.fromLTRB(26, 16, 26, 44),
                   child: Center(
                     child: Image.asset(
-                      category.imagePath,
+                      category.cardImagePath,
                       fit: BoxFit.contain,
                       errorBuilder: (_, __, ___) => const Icon(
                         Icons.category_rounded,
@@ -332,13 +429,15 @@ class _KidsLeafCard extends StatelessWidget {
                       style: TextStyle(
                         fontSize: 16.5,
                         fontWeight: FontWeight.w900,
-                        color: category.themeColor,
+                        color: category.cardColor,
                         letterSpacing: 0.2,
                       ),
                     ),
                   ),
                 ),
               ),
+              if (badge != null)
+                Positioned(top: 8, right: 8, child: badge!),
             ],
           ),
         ),

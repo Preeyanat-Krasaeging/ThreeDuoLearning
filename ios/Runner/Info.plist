@@ -4,8 +4,12 @@
 <dict>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>ใช้ไมโครโฟนเพื่ออัดเสียงร้องเพลงและฝึกพูดภาษาอังกฤษ</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>ใช้ฟังเสียงพูดภาษาอังกฤษเพื่อตรวจการออกเสียง</string>
 	<key>CFBundleDisplayName</key>
-	<string>Threeduo Learning</string>
+	<string>ThreeDuo Learning</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -13,7 +17,7 @@
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
-	<string>threeduo_learning</string>
+	<string>three_duo_learning</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>

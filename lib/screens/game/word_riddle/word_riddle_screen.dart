@@ -1,123 +1,208 @@
 import 'package:flutter/material.dart';
+import '../../../services/riddle_progress_service.dart';
+import '../../../widgets/coin_balance_chip.dart';
+import 'riddle_data.dart';
 import 'riddle_game_play_screen.dart';
 
-// --- โมเดลข้อมูลหมวดหมู่ ---
-class RiddleCategoryItem {
-  final String key;
-  final String titleTh;
-  final String cardImagePath;
-  final Color themeColor;
-  final Color buttonColor;
-  final Color shadowColor;
+export 'riddle_data.dart' show RiddleCategoryItem, riddleCategories;
 
-  const RiddleCategoryItem({
-    required this.key,
-    required this.titleTh,
-    required this.cardImagePath,
-    required this.themeColor,
-    required this.buttonColor,
-    required this.shadowColor,
-  });
-}
-
-// ----------------------------------------------------
-// หน้าเลือกหมวดหมู่ (Category Selection Screen)
-// ----------------------------------------------------
-class WordRiddleScreen extends StatelessWidget {
+class WordRiddleScreen extends StatefulWidget {
   const WordRiddleScreen({super.key});
 
-  final List<RiddleCategoryItem> categories = const [
-    // 1. สัตว์
-    RiddleCategoryItem(
-      key: 'animal',
-      titleTh: 'สัตว์',
-      cardImagePath: 'assets/images/Background/CardAnimal.png',
-      themeColor: Color(0xFFE8F5E9),
-      buttonColor: Color(0xFF2E7D32),
-      shadowColor: Color(0xFF1B5E20),
-    ),
-    // 2. กีฬา
-    RiddleCategoryItem(
-      key: 'sport',
-      titleTh: 'กีฬา',
-      cardImagePath: 'assets/images/Background/CardSport.png',
-      themeColor: Color(0xFFD1FAE5),
-      buttonColor: Color(0xFF10B981),
-      shadowColor: Color(0xFF047857),
-    ),
-    // 3. อาชีพ
-    RiddleCategoryItem(
-      key: 'career',
-      titleTh: 'อาชีพ',
-      cardImagePath: 'assets/images/Background/CardCareer.png',
-      themeColor: Color(0xFFE3F2FD),
-      buttonColor: Color(0xFF1565C0),
-      shadowColor: Color(0xFF0D47A1),
-    ),
-    // 4. บ้าน
-    RiddleCategoryItem(
-      key: 'home',
-      titleTh: 'บ้าน',
-      cardImagePath: 'assets/images/Background/CardHome.png',
-      themeColor: Color(0xFFE0F7FA),
-      buttonColor: Color(0xFF00ACC1),
-      shadowColor: Color(0xFF00838F),
-    ),
-    // 5. ยานพาหนะ
-    RiddleCategoryItem(
-      key: 'vehicle',
-      titleTh: 'ยานพาหนะ',
-      cardImagePath: 'assets/images/Background/CardVehicle.png',
-      themeColor: Color(0xFFE1F5FE),
-      buttonColor: Color(0xFF0288D1),
-      shadowColor: Color(0xFF01579B),
-    ),
-    // 6. สถานที่
-    RiddleCategoryItem(
-      key: 'location',
-      titleTh: 'สถานที่',
-      cardImagePath: 'assets/images/Background/CardLocation.png',
-      themeColor: Color(0xFFEDE7F6),
-      buttonColor: Color(0xFF7E57C2),
-      shadowColor: Color(0xFF512DA8),
-    ),
-    // 7. กิจวัตรประจำวัน
-    RiddleCategoryItem(
-      key: 'daily_routine',
-      titleTh: 'กิจวัตรประจำวัน',
-      cardImagePath: 'assets/images/Background/CardDailyRoutine.png',
-      themeColor: Color(0xFFFCE4EC),
-      buttonColor: Color(0xFFD81B60),
-      shadowColor: Color(0xFF880E4F),
-    ),
-    // 8. เสื้อผ้า
-    RiddleCategoryItem(
-      key: 'clothing',
-      titleTh: 'เสื้อผ้า',
-      cardImagePath: 'assets/images/Background/CardClothing.png',
-      themeColor: Color(0xFFFFEBEE),
-      buttonColor: Color(0xFFE53935),
-      shadowColor: Color(0xFFB71C1C),
-    ),
-    // 9. ผลไม้
-    RiddleCategoryItem(
-      key: 'fruit',
-      titleTh: 'ผลไม้',
-      cardImagePath: 'assets/images/Background/CardFruit.png',
-      themeColor: Color(0xFFFFF3E0),
-      buttonColor: Color(0xFFFB8C00),
-      shadowColor: Color(0xFFEF6C00),
-    ),
-    // 10. อาหาร
-    RiddleCategoryItem(
-      key: 'food',
-      titleTh: 'อาหาร',
-      cardImagePath: 'assets/images/Background/CardFood.png',
-      themeColor: Color(0xFFFEF3C7),
-      buttonColor: Color(0xFFF59E0B),
-      shadowColor: Color(0xFFB45309),
-    ),
-  ];
+  @override
+  State<WordRiddleScreen> createState() => _WordRiddleScreenState();
+}
+
+class _WordRiddleScreenState extends State<WordRiddleScreen> {
+  static const List<RiddleCategoryItem> categories = riddleCategories;
+
+  /// For the badges: unfinished games and finished categories.
+  Map<String, ({int done, int total})> _unfinished = {};
+  Map<String, int> _best = {};
+
+  @override
+  void initState() {
+    super.initState();
+    _loadBadges();
+    // Progress saved on the server (e.g. another phone), then refresh.
+    RiddleProgress.sync().then((_) => _loadBadges());
+    RiddleCoins.flush(); // coins of answers given while offline
+  }
+
+  Map<String, Set<String>> get _answersByCategory => {
+    for (final c in categories) c.key: c.answers,
+  };
+
+  Future<void> _loadBadges() async {
+    final unfinished = await RiddleProgress.unfinished(_answersByCategory);
+    final best = await RiddleProgress.bestScores();
+    if (!mounted) return;
+    setState(() {
+      _unfinished = unfinished;
+      _best = best;
+    });
+  }
+
+  Future<void> _open(RiddleCategoryItem category) async {
+    final saved = await RiddleProgress.load(category.key, category.answers);
+    if (!mounted) return;
+    RiddleRound? resume;
+    if (saved != null) {
+      final choice = await _askResume(category, saved);
+      if (!mounted || choice == null) return;
+      if (choice) {
+        resume = saved;
+      } else {
+        await RiddleProgress.clear(category.key);
+      }
+    }
+    if (!mounted) return;
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => RiddleGamePlayScreen(category: category, resume: resume),
+      ),
+    );
+    _loadBadges();
+  }
+
+  Future<bool?> _askResume(RiddleCategoryItem category, RiddleRound saved) {
+    final color = category.buttonColor;
+    return showDialog<bool>(
+      context: context,
+      builder:
+          (dialogContext) => AlertDialog(
+            backgroundColor: Colors.white,
+            surfaceTintColor: Colors.transparent,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(28),
+              side: BorderSide(color: color.withValues(alpha: 0.35), width: 2.5),
+            ),
+            title: Row(
+              children: [
+                Icon(Icons.play_circle_fill_rounded, color: color, size: 28),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'หมวด${category.titleTh}',
+                    style: const TextStyle(
+                      fontSize: 20,
+                      fontWeight: FontWeight.w900,
+                      color: Color(0xFF1E293B),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            content: Text(
+              'เล่นค้างไว้ ทายถูกไปแล้ว ${saved.done} จาก ${saved.total} ข้อ\n'
+              'จะเล่นต่อเลยไหม ?',
+              style: const TextStyle(
+                fontSize: 15.5,
+                height: 1.5,
+                fontWeight: FontWeight.w600,
+                color: Color(0xFF334155),
+              ),
+            ),
+            actionsPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+            actions: [
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton(
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: color,
+                        side: BorderSide(color: color.withValues(alpha: 0.5), width: 2),
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                      ),
+                      onPressed: () => Navigator.pop(dialogContext, false),
+                      child: const Text(
+                        'เริ่มใหม่',
+                        style: TextStyle(fontWeight: FontWeight.w900, fontSize: 15),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: ElevatedButton(
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: color,
+                        foregroundColor: Colors.white,
+                        elevation: 0,
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                      ),
+                      onPressed: () => Navigator.pop(dialogContext, true),
+                      child: const Text(
+                        'เล่นต่อ',
+                        style: TextStyle(fontWeight: FontWeight.w900, fontSize: 15),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+    );
+  }
+
+  /// "เล่นต่อ 7/18" for an unfinished game, a green tick when finished.
+  Widget? _badge(RiddleCategoryItem category) {
+    final unfinished = _unfinished[category.key];
+    if (unfinished != null) {
+      return Container(
+        padding: const EdgeInsets.fromLTRB(5, 3, 8, 3),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: const Color(0xFFFDE68A), width: 1.5),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.15),
+              blurRadius: 3,
+              offset: const Offset(0, 1.5),
+            ),
+          ],
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.play_arrow_rounded, size: 14, color: Color(0xFFF59E0B)),
+            const SizedBox(width: 2),
+            Text(
+              'เล่นต่อ ${unfinished.done} / ${unfinished.total}',
+              style: const TextStyle(
+                fontSize: 11,
+                fontWeight: FontWeight.w900,
+                color: Color(0xFFF59E0B),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+    if (_best.containsKey(category.key)) {
+      return Container(
+        width: 26,
+        height: 26,
+        decoration: BoxDecoration(
+          color: const Color(0xFF22C55E),
+          shape: BoxShape.circle,
+          border: Border.all(color: Colors.white, width: 2.5),
+          boxShadow: const [
+            BoxShadow(color: Colors.black26, blurRadius: 3, offset: Offset(0, 1.5)),
+          ],
+        ),
+        child: const Icon(Icons.check_rounded, size: 16, color: Colors.white),
+      );
+    }
+    return null;
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -127,7 +212,6 @@ class WordRiddleScreen extends StatelessWidget {
       backgroundColor: const Color(0xFFF8FAFC),
       body: Column(
         children: [
-          // 1. แถบ Header ด้านบน (ปรับขนาดเท่าหน้าค้นหาคำศัพท์)
           Container(
             color: topBarColor,
             child: SafeArea(
@@ -144,41 +228,40 @@ class WordRiddleScreen extends StatelessWidget {
                         child: Icon(
                           Icons.arrow_back_ios_new_rounded,
                           color: Colors.white,
-                          size: 22, // ปรับขนาดเท่ากับหน้าค้นหาคำศัพท์
+                          size: 22,
                         ),
                       ),
                     ),
+                    // Same width as the coin chip on the right, so the title stays centred.
+                    const SizedBox(width: CoinBalanceChip.width - 38),
                     const Expanded(
                       child: Text(
                         'ปริศนาทายคำ',
                         textAlign: TextAlign.center,
                         style: TextStyle(
                           color: Colors.white,
-                          fontSize: 25, // ปรับขนาดตัวหนังสือเท่ากับหน้าค้นหาคำศัพท์
+                          fontSize: 25,
                           fontWeight: FontWeight.w900,
                           letterSpacing: 0.5,
                         ),
                       ),
                     ),
-                    const SizedBox(width: 44),
+                    const CoinBalanceChip(),
                   ],
                 ),
               ),
             ),
           ),
-
-          // 2. ส่วนเนื้อหาที่เลื่อนได้ทั้งหมด (หัวข้อเลื่อนขึ้นไปด้วยกัน ไม่เด้งตอนเลื่อน)
           Expanded(
             child: CustomScrollView(
-              physics: const ClampingScrollPhysics(), // เลื่อนเรียบสนิท ชนขอบหยุดพอดี ไม่เด้ง
+              physics: const ClampingScrollPhysics(),
               slivers: [
-                // หัวข้อ "ปริศนาทายคำแสนสนุก / เลือกหมวดหมู่"
-                SliverToBoxAdapter(
+                const SliverToBoxAdapter(
                   child: Padding(
-                    padding: const EdgeInsets.fromLTRB(20, 18, 20, 14),
+                    padding: EdgeInsets.fromLTRB(20, 18, 20, 14),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
-                      children: const [
+                      children: [
                         Text(
                           'ปริศนาทายคำแสนสนุก',
                           style: TextStyle(
@@ -202,27 +285,21 @@ class WordRiddleScreen extends StatelessWidget {
                     ),
                   ),
                 ),
-
-                // รายการการ์ดแบนเนอร์หมวดหมู่
                 SliverPadding(
                   padding: const EdgeInsets.fromLTRB(18, 0, 18, 30),
                   sliver: SliverList(
                     delegate: SliverChildBuilderDelegate(
                       (context, index) {
                         final cat = categories[index];
+                        final badge = _badge(cat);
 
                         return Padding(
                           padding: const EdgeInsets.only(bottom: 18),
                           child: GestureDetector(
-                            onTap: () {
-                              Navigator.push(
-                                context,
-                                MaterialPageRoute(
-                                  builder: (_) => RiddleGamePlayScreen(category: cat),
-                                ),
-                              );
-                            },
-                            child: Container(
+                            onTap: () => _open(cat),
+                            child: Stack(
+                              children: [
+                                Container(
                               height: 158,
                               decoration: BoxDecoration(
                                 color: cat.shadowColor,
@@ -234,7 +311,7 @@ class WordRiddleScreen extends StatelessWidget {
                                   color: Colors.white,
                                   borderRadius: BorderRadius.circular(22),
                                   border: Border.all(
-                                    color: cat.buttonColor.withOpacity(0.4),
+                                    color: cat.buttonColor.withValues(alpha: 0.4),
                                     width: 2.2,
                                   ),
                                 ),
@@ -308,9 +385,9 @@ class WordRiddleScreen extends StatelessWidget {
                                                   color: cat.buttonColor,
                                                   borderRadius: BorderRadius.circular(14),
                                                 ),
-                                                child: Row(
+                                                child: const Row(
                                                   mainAxisSize: MainAxisSize.min,
-                                                  children: const [
+                                                  children: [
                                                     Text(
                                                       'เริ่มเล่นเลย',
                                                       style: TextStyle(
@@ -336,6 +413,10 @@ class WordRiddleScreen extends StatelessWidget {
                                   ],
                                 ),
                               ),
+                            ),
+                                if (badge != null)
+                                  Positioned(top: 10, right: 12, child: badge),
+                              ],
                             ),
                           ),
                         );

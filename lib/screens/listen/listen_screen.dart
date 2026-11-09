@@ -2,11 +2,35 @@ import 'package:flutter/material.dart';
 import 'minimal_pairs_screen.dart';
 import 'video_fill_blank_screen.dart';
 import 'karaoke_record_screen.dart';
+import '../../services/lesson_progress.dart';
 
-class ListenScreen extends StatelessWidget {
-  const ListenScreen({Key? key}) : super(key: key);
+class ListenScreen extends StatefulWidget {
+  const ListenScreen({super.key});
 
+  @override
+  State<ListenScreen> createState() => _ListenScreenState();
+}
+
+class _ListenScreenState extends State<ListenScreen> {
   static const Color headerPink = Color(0xFFFF146A);
+
+  // "เล่นต่อ ข้อ x/y" for the minimal-pairs game (20 questions).
+  ({int index, int correct})? _minimalPairsProgress;
+  static const int _minimalPairsTotal = 20;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadProgress();
+  }
+
+  Future<void> _loadProgress() async {
+    final saved = await LessonProgress.load(
+      'minimal_pairs',
+      _minimalPairsTotal,
+    );
+    if (mounted) setState(() => _minimalPairsProgress = saved);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -20,6 +44,10 @@ class ListenScreen extends StatelessWidget {
         'accentColor': const Color(0xFFFF6D1B),
         'textShadowColor': const Color(0xFFC75210), // เงาคมสีส้มเข้ม
         'screen': const MinimalPairsScreen(),
+        'badge':
+            _minimalPairsProgress == null
+                ? null
+                : 'เล่นต่อ ข้อ ${_minimalPairsProgress!.index + 1} / $_minimalPairsTotal',
       },
       {
         'title': 'ฟังเสียงเติมคำ',
@@ -115,7 +143,7 @@ class ListenScreen extends StatelessWidget {
                 physics: const BouncingScrollPhysics(),
                 children: [
                   const Text(
-                    'พร้อมฝึกฟังกันหรือยัง?',
+                    'พร้อมฝึกฟังกันหรือยัง ?',
                     style: TextStyle(
                       fontSize: 20,
                       fontWeight: FontWeight.w900,
@@ -147,11 +175,13 @@ class ListenScreen extends StatelessWidget {
                         shadowColor: item['shadowColor'] as Color,
                         accentColor: item['accentColor'] as Color,
                         textShadowColor: item['textShadowColor'] as Color,
-                        onTap: () {
-                          Navigator.push(
+                        badge: item['badge'] as String?,
+                        onTap: () async {
+                          await Navigator.push(
                             context,
                             MaterialPageRoute(builder: (_) => item['screen'] as Widget),
                           );
+                          _loadProgress(); // refresh the "continue" badge
                         },
                       ),
                     );
@@ -230,6 +260,7 @@ class ListenScreen extends StatelessWidget {
     required Color shadowColor,
     required Color accentColor,
     required Color textShadowColor,
+    String? badge,
     required VoidCallback onTap,
   }) {
     return GestureDetector(
@@ -338,6 +369,42 @@ class ListenScreen extends StatelessWidget {
                                 ],
                               ),
                             ),
+                            if (badge != null) ...[
+                              const SizedBox(height: 6),
+                              // "Continue" badge in the card's own colour
+                              Container(
+                                padding: const EdgeInsets.fromLTRB(6, 3, 10, 3),
+                                decoration: BoxDecoration(
+                                  color: Colors.white,
+                                  borderRadius: BorderRadius.circular(20),
+                                  boxShadow: [
+                                    BoxShadow(
+                                      color: shadowColor.withValues(alpha: 0.6),
+                                      offset: const Offset(0, 2),
+                                    ),
+                                  ],
+                                ),
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Icon(
+                                      Icons.play_circle_fill_rounded,
+                                      size: 16,
+                                      color: shadowColor,
+                                    ),
+                                    const SizedBox(width: 4),
+                                    Text(
+                                      badge,
+                                      style: TextStyle(
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.w900,
+                                        color: shadowColor,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
                           ],
                         ),
                       ),

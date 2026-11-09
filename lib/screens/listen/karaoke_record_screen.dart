@@ -1,11 +1,17 @@
 import 'dart:async';
 import 'dart:io';
+import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_tts/flutter_tts.dart';
+import 'package:google_fonts/google_fonts.dart';
 import 'package:record/record.dart';
 import 'package:audioplayers/audioplayers.dart';
-import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
+
+import '../../services/karaoke_recordings.dart';
+import '../../services/listening_results_service.dart';
+import '../../widgets/parent_pin_prompt.dart';
 
 // -------------------------------------------------------------
 // 1. Data Models
@@ -15,10 +21,15 @@ class LyricLine {
   final String translation;
   final Color dotColor;
 
+  /// When this line starts in the song's audio file (ms). Only needed for
+  /// songs with [SongItem.audioAsset]; drives the karaoke highlight.
+  final int? startMs;
+
   const LyricLine({
     required this.text,
     required this.translation,
     required this.dotColor,
+    this.startMs,
   });
 }
 
@@ -37,6 +48,17 @@ class SongItem {
   final String duration;
   final List<LyricLine> lyrics;
 
+  /// Real song file under assets/ (e.g. 'audio/karaoke/twinkle.mp3').
+  /// Null = no file yet: the lyrics are read out with text-to-speech.
+  final String? audioAsset;
+
+  /// Same song with the singing removed, played while the child records so
+  /// the take holds only their voice over the music. Must line up in time
+  /// with [audioAsset] (same startMs). Null = record over [audioAsset].
+  final String? instrumentalAsset;
+
+  bool get hasAudio => audioAsset != null;
+
   const SongItem({
     required this.id,
     required this.letter,
@@ -51,16 +73,52 @@ class SongItem {
     required this.difficulty,
     required this.duration,
     required this.lyrics,
+    this.audioAsset,
+    this.instrumentalAsset,
   });
 }
+
+/// All karaoke songs (used by the song list and the parent report).
+List<SongItem> karaokeSongs() => _KaraokeRecordScreenState.allSongs();
+
+/// Neutral share message (works for boys and girls).
+String karaokeShareText(SongItem song) =>
+    'มาฟังหนูร้องเพลง ${song.titleEn} (${song.titleTh}) กันนะ ! 🎶 '
+    'จากแอป ThreeDuo Learning';
 
 // -------------------------------------------------------------
 // 2. หน้าเลือกเพลงคาราโอเกะ (Song Selection Screen)
 // -------------------------------------------------------------
-class KaraokeRecordScreen extends StatelessWidget {
-  const KaraokeRecordScreen({Key? key}) : super(key: key);
+class KaraokeRecordScreen extends StatefulWidget {
+  const KaraokeRecordScreen({super.key});
 
-  List<SongItem> _getSongs() {
+  @override
+  State<KaraokeRecordScreen> createState() => _KaraokeRecordScreenState();
+}
+
+class _KaraokeRecordScreenState extends State<KaraokeRecordScreen> {
+  // Songs that have a saved take ("อัดแล้ว" badge).
+  Set<String> _recorded = {};
+
+  @override
+  void initState() {
+    super.initState();
+    KaraokeRecordings.cleanUpOldVersionFiles();
+    _loadRecorded();
+  }
+
+  Future<void> _loadRecorded() async {
+    final ids = allSongs().map((s) => s.id).toList();
+    final recorded = await KaraokeRecordings.songsWithRecordings(ids);
+    if (mounted) setState(() => _recorded = recorded);
+    // Takes backed up on the server (e.g. after reinstalling the app).
+    if (await KaraokeRecordings.syncWithServer(ids)) {
+      final synced = await KaraokeRecordings.songsWithRecordings(ids);
+      if (mounted) setState(() => _recorded = synced);
+    }
+  }
+
+  static List<SongItem> allSongs() {
     return const [
       // 1. Twinkle Twinkle Little Star (ชมพูพีช)
       SongItem(
@@ -72,15 +130,19 @@ class KaraokeRecordScreen extends StatelessWidget {
         buttonColor: Color(0xFFE11D48),
         buttonShadowColor: Color(0xFF9F1239),
         badgeTextColor: Color(0xFF059669),
-        titleEn: 'Twinkle Twinkle Little ...',
+        titleEn: 'Twinkle, Twinkle, Little Star',
         titleTh: 'ดาวระยิบระยับ',
         difficulty: 'ง่าย',
-        duration: '0:45',
+        duration: '0:23',
+        audioAsset: 'audio/karaoke/twinkle.mp3',
+        instrumentalAsset: 'audio/karaoke/twinkle_instrumental.mp3',
+        // startMs measured from twinkle.mp3 (22.7 s, 4 lines, no intro;
+        // highlight ~0.1 s before singing)
         lyrics: [
-          LyricLine(text: 'Twinkle, twinkle, little star,', translation: 'ดวงดาวส่องประกายระยิบระยับ', dotColor: Color(0xFFFF8DA1)),
-          LyricLine(text: 'How I wonder what you are!', translation: 'ฉันสงสัยจังว่าเธอคืออะไร', dotColor: Color(0xFFFFCA28)),
-          LyricLine(text: 'Up above the world so high,', translation: 'ลอยเหนือโลกสูงลิบ', dotColor: Color(0xFF42A5F5)),
-          LyricLine(text: 'Like a diamond in the sky.', translation: 'ราวกับเพชรเม็ดงามบนฟากฟ้า', dotColor: Color(0xFF66BB6A)),
+          LyricLine(text: 'Twinkle, twinkle, little star,', translation: 'ดวงดาวส่องประกายระยิบระยับ', dotColor: Color(0xFFFF8DA1), startMs: 800),
+          LyricLine(text: 'How I wonder what you are!', translation: 'ฉันสงสัยจังว่าเธอคืออะไร', dotColor: Color(0xFFFFCA28), startMs: 6300),
+          LyricLine(text: 'Up above the world so high,', translation: 'ลอยเหนือโลกสูงลิบ', dotColor: Color(0xFF42A5F5), startMs: 11700),
+          LyricLine(text: 'Like a diamond in the sky.', translation: 'ราวกับเพชรเม็ดงามบนฟากฟ้า', dotColor: Color(0xFF66BB6A), startMs: 17200),
         ],
       ),
 
@@ -94,15 +156,18 @@ class KaraokeRecordScreen extends StatelessWidget {
         buttonColor: Color(0xFFD97706),
         buttonShadowColor: Color(0xFF92400E),
         badgeTextColor: Color(0xFF059669),
-        titleEn: 'Row, Row, Row Your Bo...',
-        titleTh: 'พายเรือเบาๆ',
+        titleEn: 'Row, Row, Row Your Boat',
+        titleTh: 'พายเรือเบา ๆ',
         difficulty: 'ง่าย',
-        duration: '0:30',
+        duration: '0:12',
+        audioAsset: 'audio/karaoke/row_boat.mp3',
+        instrumentalAsset: 'audio/karaoke/row_boat_instrumental.mp3',
+        // startMs measured from row_boat.mp3 (highlight ~0.1 s before singing)
         lyrics: [
-          LyricLine(text: 'Row, row, row your boat,', translation: 'พายเรือของเธอไปข้างหน้า', dotColor: Color(0xFFFF8DA1)),
-          LyricLine(text: 'Gently down the stream,', translation: 'ล่องลอยเบาๆ ไปตามลำธาร', dotColor: Color(0xFFFFCA28)),
-          LyricLine(text: 'Merrily, merrily, merrily, merrily,', translation: 'อย่างเบิกบานและสดใส', dotColor: Color(0xFF42A5F5)),
-          LyricLine(text: 'Life is but a dream.', translation: 'ชีวิตเปรียบดั่งความฝันอันงดงาม', dotColor: Color(0xFF66BB6A)),
+          LyricLine(text: 'Row, row, row your boat,', translation: 'พายเรือของเธอไปข้างหน้า', dotColor: Color(0xFFFF8DA1), startMs: 300),
+          LyricLine(text: 'Gently down the stream,', translation: 'ล่องลอยเบาๆ ไปตามลำธาร', dotColor: Color(0xFFFFCA28), startMs: 2200),
+          LyricLine(text: 'Merrily, merrily, merrily, merrily,', translation: 'อย่างเบิกบานและสดใส', dotColor: Color(0xFF42A5F5), startMs: 5100),
+          LyricLine(text: 'Life is but a dream.', translation: 'ชีวิตเปรียบดั่งความฝันอันงดงาม', dotColor: Color(0xFF66BB6A), startMs: 7700),
         ],
       ),
 
@@ -119,12 +184,15 @@ class KaraokeRecordScreen extends StatelessWidget {
         titleEn: 'The Wheels on the Bus',
         titleTh: 'ล้อรถบัสหมุนไป',
         difficulty: 'ปานกลาง',
-        duration: '1:10',
+        duration: '0:16',
+        audioAsset: 'audio/karaoke/wheels_bus.mp3',
+        instrumentalAsset: 'audio/karaoke/wheels_bus_instrumental.mp3',
+        // startMs measured from wheels_bus.mp3 (highlight ~0.1 s before singing)
         lyrics: [
-          LyricLine(text: 'The wheels on the bus go round and round,', translation: 'ล้อของรถบัสหมุนวนไปรอบๆ', dotColor: Color(0xFFFF8DA1)),
-          LyricLine(text: 'Round and round, round and round,', translation: 'หมุนวนไปและหมุนวนไป', dotColor: Color(0xFFFFCA28)),
-          LyricLine(text: 'The wheels on the bus go round and round,', translation: 'ล้อของรถบัสหมุนวนไปรอบๆ', dotColor: Color(0xFF42A5F5)),
-          LyricLine(text: 'All through the town.', translation: 'แล่นผ่านไปทั่วทั้งเมือง', dotColor: Color(0xFF66BB6A)),
+          LyricLine(text: 'The wheels on the bus go round and round,', translation: 'ล้อของรถบัสหมุนวนไปรอบ ๆ', dotColor: Color(0xFFFF8DA1), startMs: 700),
+          LyricLine(text: 'Round and round, round and round,', translation: 'หมุนวนไปและหมุนวนไป', dotColor: Color(0xFFFFCA28), startMs: 4950),
+          LyricLine(text: 'The wheels on the bus go round and round,', translation: 'ล้อของรถบัสหมุนวนไปรอบ ๆ', dotColor: Color(0xFF42A5F5), startMs: 8400),
+          LyricLine(text: 'All through the town.', translation: 'แล่นผ่านไปทั่วทั้งเมือง', dotColor: Color(0xFF66BB6A), startMs: 12700),
         ],
       ),
 
@@ -138,15 +206,18 @@ class KaraokeRecordScreen extends StatelessWidget {
         buttonColor: Color(0xFF16A34A),
         buttonShadowColor: Color(0xFF14532D),
         badgeTextColor: Color(0xFFD97706),
-        titleEn: 'Head, Shoulders, Knee...',
+        titleEn: 'Head, Shoulders, Knees and Toes',
         titleTh: 'หัว ไหล่ เข่า เท้า',
         difficulty: 'ปานกลาง',
-        duration: '0:50',
+        duration: '0:25',
+        audioAsset: 'audio/karaoke/head_shoulders.mp3',
+        instrumentalAsset: 'audio/karaoke/head_shoulders_instrumental.mp3',
+        // startMs measured from head_shoulders.mp3 (highlight ~0.1 s before singing)
         lyrics: [
-          LyricLine(text: 'Head, shoulders, knees and toes,', translation: 'หัว ไหล่ เข่า และนิ้วเท้า', dotColor: Color(0xFFFF8DA1)),
-          LyricLine(text: 'Knees and toes, knees and toes,', translation: 'เข่าและนิ้วเท้า', dotColor: Color(0xFFFFCA28)),
-          LyricLine(text: 'And eyes, and ears, and mouth, and nose,', translation: 'ดวงตา หู ปาก และจมูก', dotColor: Color(0xFF42A5F5)),
-          LyricLine(text: 'Head, shoulders, knees and toes.', translation: 'หัว ไหล่ เข่า และนิ้วเท้า', dotColor: Color(0xFF66BB6A)),
+          LyricLine(text: 'Head, shoulders, knees and toes, knees and toes,', translation: 'หัว ไหล่ เข่า และนิ้วเท้า เข่าและนิ้วเท้า', dotColor: Color(0xFFFF8DA1), startMs: 700),
+          LyricLine(text: 'Head, shoulders, knees and toes, knees and toes,', translation: 'หัว ไหล่ เข่า และนิ้วเท้า เข่าและนิ้วเท้า', dotColor: Color(0xFFFFCA28), startMs: 6700),
+          LyricLine(text: 'And eyes, and ears, and mouth, and nose,', translation: 'ดวงตา หู ปาก และจมูก', dotColor: Color(0xFF42A5F5), startMs: 11200),
+          LyricLine(text: 'Head, shoulders, knees and toes, knees and toes!', translation: 'หัว ไหล่ เข่า และนิ้วเท้า เข่าและนิ้วเท้า', dotColor: Color(0xFF66BB6A), startMs: 13500),
         ],
       ),
 
@@ -160,15 +231,22 @@ class KaraokeRecordScreen extends StatelessWidget {
         buttonColor: Color(0xFFEA580C),
         buttonShadowColor: Color(0xFF9A3412),
         badgeTextColor: Color(0xFFE11D48),
-        titleEn: 'Old MacDonald Had a ...',
+        titleEn: 'Old MacDonald Had a Farm',
         titleTh: 'ลุงแมคโดนัลด์มีฟาร์ม',
         difficulty: 'ยาก',
-        duration: '1:20',
+        duration: '0:21',
+        audioAsset: 'audio/karaoke/old_macdonald.mp3',
+        instrumentalAsset: 'audio/karaoke/old_macdonald_instrumental.mp3',
+        // startMs measured from old_macdonald.mp3 (highlight ~0.1 s before singing)
         lyrics: [
-          LyricLine(text: 'Old MacDonald had a farm,', translation: 'คุณลุงแมคโดนัลด์มีฟาร์มแห่งหนึ่ง', dotColor: Color(0xFFFF8DA1)),
-          LyricLine(text: 'E-I-E-I-O,', translation: 'อี-ไอ-อี-ไอ-โอ', dotColor: Color(0xFFFFCA28)),
-          LyricLine(text: 'And on his farm he had a cow,', translation: 'และในฟาร์มของเขามีแม่วัวตัวหนึ่ง', dotColor: Color(0xFF42A5F5)),
-          LyricLine(text: 'With a moo-moo here and moo-moo there.', translation: 'ส่งเสียง มอมอ ตรงนี้และ มอมอ ตรงนั้น', dotColor: Color(0xFF66BB6A)),
+          LyricLine(text: 'Old MacDonald had a farm,', translation: 'คุณลุงแมคโดนัลด์มีฟาร์มแห่งหนึ่ง', dotColor: Color(0xFFFF8DA1), startMs: 1000),
+          LyricLine(text: 'E-I-E-I-O,', translation: 'อี-ไอ-อี-ไอ-โอ', dotColor: Color(0xFFFFCA28), startMs: 3900),
+          LyricLine(text: 'And on his farm he had a cow,', translation: 'และในฟาร์มของเขามีแม่วัวตัวหนึ่ง', dotColor: Color(0xFF42A5F5), startMs: 6000),
+          LyricLine(text: 'E-I-E-I-O,', translation: 'อี-ไอ-อี-ไอ-โอ', dotColor: Color(0xFF66BB6A), startMs: 8700),
+          LyricLine(text: 'With a moo-moo here and a moo-moo there,', translation: 'ส่งเสียง มอมอ ตรงนี้และ มอมอ ตรงนั้น', dotColor: Color(0xFFFF8DA1), startMs: 10800),
+          LyricLine(text: 'Here a moo, there a moo, everywhere a moo-moo,', translation: 'มอตรงนี้ มอตรงนั้น มอมอไปทั่วเลย', dotColor: Color(0xFFFFCA28), startMs: 13500),
+          LyricLine(text: 'Old MacDonald had a farm,', translation: 'คุณลุงแมคโดนัลด์มีฟาร์มแห่งหนึ่ง', dotColor: Color(0xFF42A5F5), startMs: 16400),
+          LyricLine(text: 'E-I-E-I-O!', translation: 'อี-ไอ-อี-ไอ-โอ', dotColor: Color(0xFF66BB6A), startMs: 18300),
         ],
       ),
 
@@ -185,12 +263,15 @@ class KaraokeRecordScreen extends StatelessWidget {
         titleEn: 'Baa, Baa, Black Sheep',
         titleTh: 'แกะดำขนฟู',
         difficulty: 'ง่าย',
-        duration: '0:35',
+        duration: '0:15',
+        audioAsset: 'audio/karaoke/baa_black_sheep.mp3',
+        instrumentalAsset: 'audio/karaoke/baa_black_sheep_instrumental.mp3',
+        // startMs measured from baa_black_sheep.mp3 (highlight ~0.1 s before singing)
         lyrics: [
-          LyricLine(text: 'Baa, baa, black sheep,', translation: 'แบะ แบะ เจ้าแกะดำตัวน้อย', dotColor: Color(0xFFFF8DA1)),
-          LyricLine(text: 'Have you any wool?', translation: 'เธอมีขนแกะนุ่มๆ บ้างไหม', dotColor: Color(0xFFFFCA28)),
-          LyricLine(text: 'Yes, sir, yes, sir, three bags full,', translation: 'มีครับ มีครับ เต็มสามถุงเลย', dotColor: Color(0xFF42A5F5)),
-          LyricLine(text: 'One for the master, one for the dame.', translation: 'หนึ่งถุงให้เจ้านาย หนึ่งถุงให้คุณนาย', dotColor: Color(0xFF66BB6A)),
+          LyricLine(text: 'Baa, baa, black sheep,', translation: 'แบะ แบะ เจ้าแกะดำตัวน้อย', dotColor: Color(0xFFFF8DA1), startMs: 600),
+          LyricLine(text: 'Have you any wool?', translation: 'เธอมีขนแกะนุ่ม ๆ บ้างไหม', dotColor: Color(0xFFFFCA28), startMs: 3000),
+          LyricLine(text: 'Yes, sir, yes, sir, three bags full,', translation: 'มีครับ มีครับ เต็มสามถุงเลย', dotColor: Color(0xFF42A5F5), startMs: 5300),
+          LyricLine(text: 'One for the master, one for the dame.', translation: 'หนึ่งถุงให้เจ้านาย หนึ่งถุงให้คุณนาย', dotColor: Color(0xFF66BB6A), startMs: 10100),
         ],
       ),
     ];
@@ -198,7 +279,7 @@ class KaraokeRecordScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final songs = _getSongs();
+    final songs = allSongs();
     const purpleHeader = Color(0xFF8B5CF6);
 
     return Scaffold(
@@ -248,7 +329,7 @@ class KaraokeRecordScreen extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: const [
                   Text(
-                    'พร้อมร้องเพลงกันหรือยัง?',
+                    'พร้อมร้องเพลงกันหรือยัง ?',
                     style: TextStyle(
                       fontSize: 22,
                       fontWeight: FontWeight.w900,
@@ -289,13 +370,14 @@ class KaraokeRecordScreen extends StatelessWidget {
 
   Widget _buildSampleSongCard(BuildContext context, SongItem song) {
     return GestureDetector(
-      onTap: () {
-        Navigator.push(
+      onTap: () async {
+        await Navigator.push(
           context,
           MaterialPageRoute(
             builder: (context) => KaraokeDetailScreen(song: song),
           ),
         );
+        _loadRecorded(); // refresh the "อัดแล้ว" badges
       },
       child: Container(
         decoration: BoxDecoration(
@@ -379,9 +461,11 @@ class KaraokeRecordScreen extends StatelessWidget {
                     const SizedBox(height: 4),
                     Row(
                       children: [
-                        // ป้ายระดับความยาก
+                        // ป้ายระดับความยาก (กว้างเท่ากันทุกเพลง ป้ายถัดไปจะได้ตรงกัน)
                         Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 2),
+                          width: 62,
+                          alignment: Alignment.center,
+                          padding: const EdgeInsets.symmetric(vertical: 2),
                           decoration: BoxDecoration(
                             color: Colors.white.withValues(alpha: 0.95),
                             borderRadius: BorderRadius.circular(9),
@@ -403,15 +487,56 @@ class KaraokeRecordScreen extends StatelessWidget {
                           ),
                         ),
                         const SizedBox(width: 8),
-                        // เวลาความยาว
-                        Text(
+                        // เวลาความยาว (กว้างคงที่)
+                        SizedBox(
+                          width: 32,
+                          child: Text(
                           song.duration,
+                          textAlign: TextAlign.center,
                           style: TextStyle(
                             fontSize: 11.5,
                             fontWeight: FontWeight.w800,
                             color: Colors.black.withValues(alpha: 0.55),
                           ),
                         ),
+                        ),
+                        if (_recorded.contains(song.id)) ...[
+                          const SizedBox(width: 8),
+                          // Same pill style as the difficulty badge
+                          Container(
+                            padding: const EdgeInsets.fromLTRB(6, 2, 9, 2),
+                            decoration: BoxDecoration(
+                              color: Colors.white.withValues(alpha: 0.95),
+                              borderRadius: BorderRadius.circular(9),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: Colors.black.withValues(alpha: 0.05),
+                                  blurRadius: 2,
+                                  offset: const Offset(0, 1),
+                                ),
+                              ],
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(
+                                  Icons.mic_rounded,
+                                  size: 12,
+                                  color: song.buttonColor,
+                                ),
+                                const SizedBox(width: 2),
+                                Text(
+                                  'อัดแล้ว',
+                                  style: TextStyle(
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w900,
+                                    color: song.buttonColor,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
                       ],
                     ),
                   ],
@@ -472,7 +597,7 @@ class KaraokeRecordScreen extends StatelessWidget {
 class KaraokeDetailScreen extends StatefulWidget {
   final SongItem song;
 
-  const KaraokeDetailScreen({Key? key, required this.song}) : super(key: key);
+  const KaraokeDetailScreen({super.key, required this.song});
 
   @override
   State<KaraokeDetailScreen> createState() => _KaraokeDetailScreenState();
@@ -486,22 +611,321 @@ class _KaraokeDetailScreenState extends State<KaraokeDetailScreen> {
   bool _isDemoPlaying = false;
   bool _hasDemoFinished = false;
   bool _isRecording = false;
+  bool _isPaused = false; // recording, but on hold ("พัก")
+  bool _hasSavedTake = false; // a previous take exists for this song
   bool _isPlayingRecord = false;
   String? _recordedFilePath;
 
   int _recordingSeconds = 0;
   Timer? _recordingTimer;
+  // Loudest mic level heard during the current take (dBFS, -160 = silence).
+  StreamSubscription<Amplitude>? _ampSub;
+  StreamSubscription<RecordState>? _recStateSub;
+  double _maxAmplitude = -160;
   int currentLyricIndex = -1;
 
+  // How long each lyric line took in the demo, so the highlight can follow
+  // along at the same pace while the child records.
+  final Map<int, Duration> _lineDurations = {};
+  Timer? _lyricGuideTimer;
+
+  // Real song playback (songs with an audio file): demo and backing track.
+  final AudioPlayer _songPlayer = AudioPlayer();
+  final List<GlobalKey> _lineKeys = [];
+
+  // Debug-only helper to measure startMs: tap when each line starts.
+  bool _syncMode = false;
+  final List<int> _syncTimes = [];
+  int _songPositionMs = 0;
+
   static const Color purplePrimary = Color(0xFF8B5CF6);
+
+  /// Recording stops by itself after this long (in case a child forgets).
+  static const int maxRecordingSeconds = 120;
 
   @override
   void initState() {
     super.initState();
     _initTts();
+    _audioPlayer.setReleaseMode(ReleaseMode.stop);
     _audioPlayer.onPlayerComplete.listen((_) {
       if (mounted) setState(() => _isPlayingRecord = false);
     });
+    // Keep the button in sync with what the player really does.
+    _audioPlayer.onPlayerStateChanged.listen((state) {
+      debugPrint('[karaoke] take player state: $state');
+      if (!mounted) return;
+      if (state == PlayerState.playing && !_isPlayingRecord) {
+        setState(() => _isPlayingRecord = true);
+      } else if (state == PlayerState.completed && _isPlayingRecord) {
+        setState(() => _isPlayingRecord = false);
+      }
+    });
+    _loadLatestRecording();
+    _lineKeys.addAll(
+      List.generate(widget.song.lyrics.length, (_) => GlobalKey()),
+    );
+    // The recorder pauses itself whenever another player takes the audio
+    // focus. The backing song must therefore play WITHOUT asking for focus,
+    // otherwise the take is silent from the moment the song starts.
+    // Listen ONCE for the whole screen: the recorder hands out a
+    // single-listener stream, so listening again for a second take throws
+    // "Stream has already been listened to" (that broke "อัดใหม่").
+    _ampSub = _audioRecorder
+        .onAmplitudeChanged(const Duration(milliseconds: 300))
+        .listen((a) {
+      if (a.current > _maxAmplitude) _maxAmplitude = a.current;
+    });
+    _recStateSub = _audioRecorder.onStateChanged().listen((state) {
+      debugPrint('[karaoke] recorder state: $state');
+      if (state == RecordState.pause && _isRecording && !_isPaused) {
+        // Paused by the system, not by the child: carry on recording.
+        _audioRecorder.resume().catchError((e) {
+          debugPrint('[karaoke] auto-resume failed: $e');
+        });
+      }
+    });
+    if (widget.song.hasAudio) {
+      _songPlayer.setAudioContext(
+        AudioContext(
+          android: const AudioContextAndroid(
+            audioFocus: AndroidAudioFocus.none,
+          ),
+          iOS: AudioContextIOS(
+            category: AVAudioSessionCategory.playAndRecord,
+            options: const {AVAudioSessionOptions.defaultToSpeaker},
+          ),
+        ),
+      );
+      _songPlayer.onPositionChanged.listen(_onSongPosition);
+      _songPlayer.onPlayerComplete.listen((_) => _onSongComplete());
+    }
+  }
+
+  /// Index of the line being sung at [ms] (-1 during the intro).
+  int _lineAt(int ms) {
+    var index = -1;
+    final lines = widget.song.lyrics;
+    for (var i = 0; i < lines.length; i++) {
+      final start = lines[i].startMs;
+      if (start != null && ms >= start) index = i;
+    }
+    return index;
+  }
+
+  void _onSongPosition(Duration position) {
+    _songPositionMs = position.inMilliseconds;
+    if (!mounted || _syncMode) return;
+    if (!_isDemoPlaying && !_isRecording) return;
+    final index = _lineAt(_songPositionMs);
+    if (index != currentLyricIndex) {
+      setState(() => currentLyricIndex = index);
+      _scrollToCurrentLine();
+    }
+  }
+
+  void _onSongComplete() {
+    if (!mounted) return;
+    if (_syncMode) {
+      _finishSync();
+      return;
+    }
+    if (_isDemoPlaying) {
+      setState(() {
+        _isDemoPlaying = false;
+        _hasDemoFinished = true;
+        currentLyricIndex = -1;
+      });
+    } else if (_isRecording) {
+      // Song is over; the child can still finish and press "เสร็จแล้ว".
+      setState(() => currentLyricIndex = -1);
+    }
+  }
+
+  /// Keeps the highlighted line on screen (songs can have 6+ lines).
+  void _scrollToCurrentLine() {
+    final i = currentLyricIndex;
+    if (i < 0 || i >= _lineKeys.length) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final ctx = _lineKeys[i].currentContext;
+      if (ctx != null) {
+        Scrollable.ensureVisible(
+          ctx,
+          alignment: 0.5,
+          duration: const Duration(milliseconds: 300),
+        );
+      }
+    });
+  }
+
+  /// Stops the song only if it is actually playing/paused. Stopping a player
+  /// that never loaded a file throws on Android, which used to abort whatever
+  /// called it (e.g. the "ฟังเสียงที่อัด" button did nothing).
+  Future<void> _stopSong() async {
+    final state = _songPlayer.state;
+    if (state != PlayerState.playing && state != PlayerState.paused) return;
+    try {
+      await _songPlayer.stop();
+    } catch (e) {
+      debugPrint('Error stopping song: $e');
+    }
+  }
+
+  /// [instrumental]: play the version without singing (used while recording).
+  Future<void> _playSongFrom(int ms, {bool instrumental = false}) async {
+    await _stopSong();
+    final asset = instrumental
+        ? (widget.song.instrumentalAsset ?? widget.song.audioAsset!)
+        : widget.song.audioAsset!;
+    await _songPlayer.play(
+      AssetSource(asset),
+      position: Duration(milliseconds: ms),
+    );
+  }
+
+  // ---------- debug: measure startMs by tapping ----------
+  Future<void> _startSync() async {
+    await _audioPlayer.stop();
+    setState(() {
+      _syncMode = true;
+      _syncTimes.clear();
+      currentLyricIndex = -1;
+    });
+    _showSnack(
+      'โหมดจับเวลา: แตะเนื้อเพลงทุกครั้งที่บรรทัดใหม่เริ่มร้อง',
+      color: purplePrimary,
+    );
+    await _playSongFrom(0);
+  }
+
+  void _recordSyncTap() {
+    if (_syncTimes.length >= widget.song.lyrics.length) return;
+    setState(() {
+      _syncTimes.add(_songPositionMs);
+      currentLyricIndex = _syncTimes.length - 1;
+    });
+    _scrollToCurrentLine();
+    if (_syncTimes.length == widget.song.lyrics.length) _finishSync();
+  }
+
+  Future<void> _finishSync() async {
+    if (!_syncMode) return;
+    await _stopSong();
+    final lines = <String>[];
+    for (var i = 0; i < _syncTimes.length; i++) {
+      // Show the highlight a little before the singing starts.
+      final ms = (_syncTimes[i] - 150).clamp(0, 1 << 30);
+      lines.add("startMs: $ms, // ${widget.song.lyrics[i].text}");
+    }
+    final text = lines.join('\n');
+    debugPrint('Karaoke timings for ${widget.song.id}:\n$text');
+    await Clipboard.setData(ClipboardData(text: text));
+    if (!mounted) return;
+    setState(() {
+      _syncMode = false;
+      currentLyricIndex = -1;
+    });
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('จับเวลาเสร็จแล้ว (คัดลอกให้แล้ว)'),
+        content: SelectableText(
+          text.isEmpty ? 'ยังไม่ได้แตะเลย' : text,
+          style: const TextStyle(fontSize: 12, fontFamily: 'monospace'),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('ปิด'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Shows the child's last take of this song, so they can listen or share
+  /// it again (or record a new one).
+  Future<void> _loadLatestRecording() async {
+    // Not on this phone: maybe backed up on the server.
+    final latest =
+        await KaraokeRecordings.latest(widget.song.id) ??
+        await KaraokeRecordings.syncWithServer([widget.song.id]).then(
+          (_) => KaraokeRecordings.latest(widget.song.id),
+        );
+    if (!mounted) return;
+    setState(() => _hasSavedTake = latest != null);
+    if (latest == null || _isRecording) return;
+    setState(() {
+      _recordedFilePath = latest.path;
+      _recordingSeconds = latest.seconds;
+      _hasDemoFinished = true; // they've sung this before
+    });
+  }
+
+  void _showSnack(String message, {Color color = const Color(0xFFDC2626)}) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).hideCurrentSnackBar();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        backgroundColor: color,
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+      ),
+    );
+  }
+
+  Future<void> _showMicPermissionHelp() {
+    return showDialog<void>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        backgroundColor: Colors.white,
+        surfaceTintColor: Colors.transparent,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(28),
+          side: const BorderSide(color: Color(0xFFDDD6FE), width: 2.5),
+        ),
+        title: const Row(
+          children: [
+            Icon(Icons.mic_off_rounded, color: purplePrimary, size: 26),
+            SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                'ยังใช้ไมโครโฟนไม่ได้',
+                style: TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w900,
+                  color: Color(0xFF1E293B),
+                ),
+              ),
+            ),
+          ],
+        ),
+        content: const Text(
+          'แอปยังไม่ได้รับอนุญาตให้ใช้ไมโครโฟน ให้ผู้ปกครองช่วยเปิดสิทธิ์ที่\n\n'
+          'การตั้งค่าโทรศัพท์ > แอป > ThreeDuo Learning > สิทธิ์ > ไมโครโฟน > อนุญาต\n\n'
+          'แล้วกลับมากดอัดเสียงอีกครั้งนะ',
+          style: TextStyle(fontSize: 14, height: 1.5, color: Color(0xFF475569)),
+        ),
+        actions: [
+          ElevatedButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: purplePrimary,
+              foregroundColor: Colors.white,
+              elevation: 0,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(16),
+              ),
+            ),
+            child: const Text(
+              'เข้าใจแล้ว',
+              style: TextStyle(fontWeight: FontWeight.w900),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _initTts() async {
@@ -511,8 +935,10 @@ class _KaraokeDetailScreenState extends State<KaraokeDetailScreen> {
   }
 
   Future<void> _togglePlayDemo() async {
+    if (_syncMode) return;
     if (_isDemoPlaying) {
       await _flutterTts.stop();
+      await _stopSong();
       setState(() {
         _isDemoPlaying = false;
         currentLyricIndex = -1;
@@ -521,6 +947,22 @@ class _KaraokeDetailScreenState extends State<KaraokeDetailScreen> {
       if (_isPlayingRecord) {
         await _audioPlayer.stop();
         setState(() => _isPlayingRecord = false);
+      }
+
+      if (widget.song.hasAudio) {
+        // Real song: the highlight follows the music (see _onSongPosition).
+        setState(() {
+          _isDemoPlaying = true;
+          currentLyricIndex = -1;
+        });
+        try {
+          await _playSongFrom(0);
+        } catch (e) {
+          debugPrint('Error playing song: $e');
+          if (mounted) setState(() => _isDemoPlaying = false);
+          _showSnack('เปิดเพลงไม่สำเร็จ ลองใหม่อีกครั้งนะ');
+        }
+        return;
       }
 
       setState(() {
@@ -542,10 +984,12 @@ class _KaraokeDetailScreenState extends State<KaraokeDetailScreen> {
           }
         });
 
+        final lineTimer = Stopwatch()..start();
         await _flutterTts.speak(widget.song.lyrics[i].text);
         await lineCompleter.future;
 
         await Future.delayed(const Duration(milliseconds: 300));
+        _lineDurations[i] = lineTimer.elapsed;
       }
 
       if (mounted) {
@@ -558,81 +1002,355 @@ class _KaraokeDetailScreenState extends State<KaraokeDetailScreen> {
     }
   }
 
-  Future<void> _startRecording() async {
-    try {
-      if (await _audioRecorder.hasPermission()) {
-        final dir = await getApplicationDocumentsDirectory();
-        final path = '${dir.path}/sing_${widget.song.id}_${DateTime.now().millisecondsSinceEpoch}.m4a';
+  /// Time to show [index] while recording: the demo's pace, a bit slower
+  /// for singing; or an estimate from the number of words if the demo
+  /// wasn't played this time (e.g. re-recording a song sung before).
+  Duration _guideDurationFor(int index) {
+    final measured = _lineDurations[index];
+    if (measured != null) {
+      return Duration(milliseconds: (measured.inMilliseconds * 1.25).round());
+    }
+    final words = widget.song.lyrics[index].text.trim().split(RegExp(r'\s+')).length;
+    return Duration(milliseconds: 1200 + words * 700);
+  }
 
-        if (_isDemoPlaying) {
-          await _flutterTts.stop();
-          setState(() {
-            _isDemoPlaying = false;
-            currentLyricIndex = -1;
-          });
-        }
+  /// Highlights lyric [index] and moves on by itself; after the last line
+  /// the highlight goes away.
+  void _guideLyric(int index) {
+    _lyricGuideTimer?.cancel();
+    if (!mounted || !_isRecording || _isPaused) return;
+    if (index >= widget.song.lyrics.length) {
+      setState(() => currentLyricIndex = -1);
+      return;
+    }
+    setState(() => currentLyricIndex = index);
+    _lyricGuideTimer = Timer(_guideDurationFor(index), () => _guideLyric(index + 1));
+  }
 
-        await _audioRecorder.start(
-          const RecordConfig(encoder: AudioEncoder.aacLc),
-          path: path,
-        );
-
-        _recordingSeconds = 0;
-        _recordingTimer?.cancel();
-        _recordingTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
-          setState(() => _recordingSeconds++);
-        });
-
-        setState(() {
-          _isRecording = true;
-          _recordedFilePath = null;
-        });
-      }
-    } catch (e) {
-      debugPrint('Error starting record: $e');
+  /// Tap a lyric while recording: jump there (song) or move the guide.
+  void _jumpToLine(int index) {
+    if (widget.song.hasAudio) {
+      final start = widget.song.lyrics[index].startMs ?? 0;
+      _songPlayer.seek(Duration(milliseconds: start));
+      setState(() => currentLyricIndex = index);
+    } else {
+      _guideLyric(index);
     }
   }
 
+  void _stopLyricGuide() {
+    _lyricGuideTimer?.cancel();
+    _lyricGuideTimer = null;
+    if (widget.song.hasAudio && !_isDemoPlaying) _stopSong();
+    if (mounted && currentLyricIndex != -1 && !_isDemoPlaying) {
+      setState(() => currentLyricIndex = -1);
+    }
+  }
+
+  Future<void> _startRecording() async {
+    try {
+      if (!await _audioRecorder.hasPermission()) {
+        // Previously this did nothing at all; explain what to do instead.
+        await _showMicPermissionHelp();
+        _loadLatestRecording(); // keep showing the last take, if any
+        return;
+      }
+
+      final path = await KaraokeRecordings.newRecordingPath(widget.song.id);
+
+      if (_isDemoPlaying) {
+        await _flutterTts.stop();
+        setState(() {
+          _isDemoPlaying = false;
+          currentLyricIndex = -1;
+        });
+      }
+
+      // Stop anything still holding the audio (a previous take that never
+      // closed, or the take being listened to) before opening the mic.
+      try {
+        await _audioPlayer.stop();
+        if (await _audioRecorder.isRecording() ||
+            await _audioRecorder.isPaused()) {
+          await _audioRecorder.cancel();
+        }
+      } catch (e) {
+        debugPrint('[karaoke] pre-record cleanup: $e');
+      }
+      if (mounted) setState(() => _isPlayingRecord = false);
+
+      await _audioRecorder.start(
+        const RecordConfig(encoder: AudioEncoder.aacLc),
+        path: path,
+      );
+
+      _recordingSeconds = 0;
+      _startRecordingTimer();
+      _maxAmplitude = -160;
+
+      setState(() {
+        _isRecording = true;
+        _isPaused = false;
+        _recordedFilePath = null;
+      });
+      if (widget.song.hasAudio) {
+        // Backing track while singing; the highlight follows it.
+        currentLyricIndex = -1;
+        _playSongFrom(0, instrumental: true);
+      } else {
+        _guideLyric(0); // karaoke-style highlight while singing
+      }
+    } catch (e, st) {
+      debugPrint('Error starting record: $e\n$st');
+      _recordingTimer?.cancel();
+      // Don't leave the mic open after a half-started take.
+      try {
+        await _audioRecorder.cancel();
+      } catch (_) {}
+      _stopLyricGuide();
+      if (mounted) setState(() => _isRecording = false);
+      _showSnack(kDebugMode
+          ? 'เริ่มอัดเสียงไม่สำเร็จ (debug: $e)'
+          : 'เริ่มอัดเสียงไม่สำเร็จ ลองใหม่อีกครั้งนะ');
+      _loadLatestRecording();
+    }
+  }
+
+  /// Counts recording time (only while actually recording, not paused).
+  void _startRecordingTimer() {
+    _recordingTimer?.cancel();
+    _recordingTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (!mounted || _isPaused) return;
+      setState(() => _recordingSeconds++);
+      if (_recordingSeconds >= maxRecordingSeconds) {
+        _stopRecording();
+        _showSnack(
+          'ครบ ${maxRecordingSeconds ~/ 60} นาทีแล้ว หยุดอัดให้อัตโนมัตินะ',
+          color: purplePrimary,
+        );
+      }
+    });
+  }
+
+  /// "พัก": hold the recording; "อัดต่อ": carry on in the same file.
+  Future<void> _togglePauseRecording() async {
+    if (!_isRecording) return;
+    try {
+      if (_isPaused) {
+        await _audioRecorder.resume();
+        if (!mounted) return;
+        setState(() => _isPaused = false);
+        _startRecordingTimer();
+        if (widget.song.hasAudio) {
+          await _songPlayer.resume();
+        } else {
+          _guideLyric(currentLyricIndex < 0 ? 0 : currentLyricIndex);
+        }
+      } else {
+        // Set first, so the recorder listener knows this pause is on purpose.
+        _isPaused = true;
+        await _audioRecorder.pause();
+        _recordingTimer?.cancel();
+        _lyricGuideTimer?.cancel(); // keep the current line highlighted
+        if (widget.song.hasAudio) await _songPlayer.pause();
+        if (mounted) setState(() => _isPaused = true);
+      }
+    } catch (e) {
+      debugPrint('Error pausing/resuming record: $e');
+      _showSnack('พัก/อัดต่อไม่สำเร็จ ลองกด เสร็จแล้ว เพื่อบันทึกนะ');
+    }
+  }
+
+  Future<void> _deleteRecording() async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        backgroundColor: Colors.white,
+        surfaceTintColor: Colors.transparent,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(28),
+          side: const BorderSide(color: Color(0xFFFECDD3), width: 2.5),
+        ),
+        title: const Row(
+          children: [
+            Icon(Icons.delete_rounded, color: Color(0xFFE11D48), size: 26),
+            SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                'ลบเสียงที่อัดไว้ ?',
+                style: TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w900,
+                  color: Color(0xFF1E293B),
+                ),
+              ),
+            ),
+          ],
+        ),
+        content: const Text(
+          'ลบแล้วจะเอากลับมาไม่ได้นะ',
+          style: TextStyle(fontSize: 14, color: Color(0xFF475569)),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text(
+              'ยกเลิก',
+              style: TextStyle(
+                color: Color(0xFF64748B),
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFFE11D48),
+              foregroundColor: Colors.white,
+              elevation: 0,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(16),
+              ),
+            ),
+            child: const Text(
+              'ลบเลย',
+              style: TextStyle(fontWeight: FontWeight.w900),
+            ),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+    await _audioPlayer.stop();
+    await KaraokeRecordings.deleteLatest(widget.song.id);
+    if (!mounted) return;
+    setState(() {
+      _recordedFilePath = null;
+      _isPlayingRecord = false;
+      _recordingSeconds = 0;
+      _hasSavedTake = false;
+    });
+    _showSnack('ลบเสียงเรียบร้อยแล้ว', color: purplePrimary);
+  }
+
   Future<void> _stopRecording() async {
+    if (!_isRecording) return;
+    _stopLyricGuide();
     try {
       _recordingTimer?.cancel();
       final path = await _audioRecorder.stop();
+      debugPrint('[karaoke] take saved: $path, loudest mic level '
+          '${_maxAmplitude.toStringAsFixed(1)} dBFS');
+      if (path != null) {
+        // Keep only this take; the previous one of this song is deleted.
+        await KaraokeRecordings.saveLatest(
+          widget.song.id,
+          path,
+          _recordingSeconds,
+        );
+        // Count the take in the parent report (the audio stays on the phone).
+        ListeningResults.submit(
+          game: 'karaoke',
+          topic: widget.song.id,
+          durationSeconds: _recordingSeconds,
+        );
+      }
+      if (!mounted) return;
       setState(() {
         _isRecording = false;
+        _isPaused = false;
         _recordedFilePath = path;
+        if (path != null) _hasSavedTake = true;
       });
+      if (path == null) {
+        _showSnack('บันทึกเสียงไม่สำเร็จ ลองอัดใหม่อีกครั้งนะ');
+      } else if (_maxAmplitude < -50) {
+        // The file plays, but the mic heard nothing (blocked/muted mic, or an
+        // emulator whose virtual microphone is off).
+        _showSnack('ไมโครโฟนไม่ได้ยินเสียงเลย เสียงที่อัดอาจเงียบ ลองตรวจไมโครโฟนแล้วอัดใหม่นะ');
+      }
     } catch (e) {
       debugPrint('Error stopping record: $e');
+      if (mounted) {
+        setState(() {
+          _isRecording = false;
+          _isPaused = false;
+        });
+      }
+      _showSnack('บันทึกเสียงไม่สำเร็จ ลองอัดใหม่อีกครั้งนะ');
+      _loadLatestRecording();
     }
   }
 
   Future<void> _togglePlayRecordedAudio() async {
-    if (_recordedFilePath == null) return;
+    final path = _recordedFilePath;
+    debugPrint('[karaoke] play tapped: playing=$_isPlayingRecord path=$path');
+    if (path == null) return;
 
-    if (_isDemoPlaying) {
-      await _flutterTts.stop();
-      setState(() {
-        _isDemoPlaying = false;
-        currentLyricIndex = -1;
-      });
+    // Tapped while playing -> stop.
+    if (_isPlayingRecord) {
+      setState(() => _isPlayingRecord = false);
+      try {
+        await _audioPlayer.stop();
+      } catch (e) {
+        debugPrint('Error stopping recording playback: $e');
+      }
+      return;
     }
 
-    if (_isPlayingRecord) {
+    final file = File(path);
+    final size = file.existsSync() ? file.lengthSync() : -1;
+    debugPrint('[karaoke] take file size: $size bytes');
+    if (size < 0) {
+      setState(() => _recordedFilePath = null);
+      _showSnack('ไม่พบไฟล์เสียงที่อัดไว้ ลองอัดใหม่อีกครั้งนะ');
+      return;
+    }
+    if (size < 1024) {
+      _showSnack('ไฟล์เสียงที่อัดว่างเปล่า ลองอัดใหม่อีกครั้งนะ');
+      return;
+    }
+
+    // Show "หยุดฟัง" right away so the tap always visibly does something.
+    setState(() {
+      _isPlayingRecord = true;
+      _isDemoPlaying = false;
+      currentLyricIndex = -1;
+    });
+    await _stopSong();
+    try {
+      await _flutterTts.stop();
+    } catch (_) {}
+
+    try {
       await _audioPlayer.stop();
-      setState(() => _isPlayingRecord = false);
-    } else {
-      await _audioPlayer.play(DeviceFileSource(_recordedFilePath!));
-      setState(() => _isPlayingRecord = true);
+      await _audioPlayer
+          .play(DeviceFileSource(path))
+          .timeout(const Duration(seconds: 6));
+      debugPrint('[karaoke] take duration: ${await _audioPlayer.getDuration()}');
+    } catch (e) {
+      debugPrint('Error playing recording: $e');
+      try {
+        await _audioPlayer.stop();
+      } catch (_) {}
+      if (mounted) setState(() => _isPlayingRecord = false);
+      _showSnack('เปิดเสียงที่อัดไม่สำเร็จ ลองอัดใหม่อีกครั้งนะ');
     }
   }
 
-  void _shareRecordedFile() {
-    if (_recordedFilePath != null && File(_recordedFilePath!).existsSync()) {
-      Share.shareXFiles(
-        [XFile(_recordedFilePath!)],
-        text: 'ฟังเสียงร้องเพลงภาษาอังกฤษ "${widget.song.titleTh}" ของหนูสิคะ! 🎶💖',
-      );
-    }
+  /// The parent sends it: ask for the parent PIN first, so a child can't
+  /// send their voice to anyone by themselves. With no PIN yet, the parent
+  /// creates one first (the parent zone then uses the same PIN).
+  Future<void> _shareRecordedFile() async {
+    final path = _recordedFilePath;
+    if (path == null || !File(path).existsSync()) return;
+    final allowed = await showParentPinPrompt(
+      context,
+      title: 'ผู้ปกครองยืนยันก่อนส่ง',
+      setupIfMissing: true,
+    );
+    if (!allowed || !mounted) return;
+    await Share.shareXFiles([XFile(path)], text: karaokeShareText(widget.song));
   }
 
   String _formatDuration(int seconds) {
@@ -644,9 +1362,25 @@ class _KaraokeDetailScreenState extends State<KaraokeDetailScreen> {
   @override
   void dispose() {
     _recordingTimer?.cancel();
+    _lyricGuideTimer?.cancel();
     _flutterTts.stop();
-    _audioRecorder.dispose();
+    final recorder = _audioRecorder;
+    if (_isRecording) {
+      // Left in the middle of a take: throw the unfinished file away.
+      recorder
+          .stop()
+          .then((path) {
+            if (path != null) KaraokeRecordings.deleteFile(path);
+          })
+          .catchError((_) {})
+          .whenComplete(recorder.dispose);
+    } else {
+      recorder.dispose();
+    }
+    _ampSub?.cancel();
+    _recStateSub?.cancel();
     _audioPlayer.dispose();
+    _songPlayer.dispose();
     super.dispose();
   }
 
@@ -747,7 +1481,7 @@ class _KaraokeDetailScreenState extends State<KaraokeDetailScreen> {
                       child: Container(
                         width: 9,
                         height: 9,
-                        decoration: const BoxDecoration(color: Color(0xFFFF8DA1), shape: BoxShape.circle),
+                        decoration: const BoxDecoration(color: Color(0xFFFFCA28), shape: BoxShape.circle),
                       ),
                     ),
                     Positioned(
@@ -765,7 +1499,7 @@ class _KaraokeDetailScreenState extends State<KaraokeDetailScreen> {
                       child: Container(
                         width: 9,
                         height: 9,
-                        decoration: const BoxDecoration(color: Color(0xFF42A5F5), shape: BoxShape.circle),
+                        decoration: const BoxDecoration(color: Color(0xFFFFCA28), shape: BoxShape.circle),
                       ),
                     ),
                     Positioned(
@@ -774,7 +1508,7 @@ class _KaraokeDetailScreenState extends State<KaraokeDetailScreen> {
                       child: Container(
                         width: 9,
                         height: 9,
-                        decoration: const BoxDecoration(color: Color(0xFF66BB6A), shape: BoxShape.circle),
+                        decoration: const BoxDecoration(color: Color(0xFFFFCA28), shape: BoxShape.circle),
                       ),
                     ),
 
@@ -785,71 +1519,89 @@ class _KaraokeDetailScreenState extends State<KaraokeDetailScreen> {
                         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 20),
                         itemCount: widget.song.lyrics.length,
                         separatorBuilder: (_, __) => const SizedBox(height: 18),
-                        itemBuilder: (context, index) {
+                        itemBuilder: (context, index) => GestureDetector(
+                          behavior: HitTestBehavior.opaque,
+                          // While recording, tap a line to move the highlight there.
+                          onTap: _syncMode
+                              ? _recordSyncTap
+                              : (_isRecording ? () => _jumpToLine(index) : null),
+                          child: KeyedSubtree(
+                            key: _lineKeys[index],
+                            child: Builder(builder: (context) {
                           final line = widget.song.lyrics[index];
                           final bool isCurrent = (index == currentLyricIndex);
 
                           if (isCurrent) {
-                            return AnimatedContainer(
+                            return TweenAnimationBuilder<double>(
+                              key: ValueKey('current-$index'),
+                              tween: Tween(begin: 0.94, end: 1.0),
+                              duration: const Duration(milliseconds: 280),
+                              curve: Curves.easeOutBack,
+                              builder: (context, scale, child) =>
+                                  Transform.scale(scale: scale, child: child),
+                              child: AnimatedContainer(
                               duration: const Duration(milliseconds: 250),
                               width: double.infinity,
                               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
                               decoration: BoxDecoration(
-                                color: const Color(0xFFFFF0F3),
+                                // Light sky blue, same family as the "ฟังเสียงที่อัด" button.
+                                color: const Color(0xFFEAF6FF),
                                 borderRadius: BorderRadius.circular(22),
-                                border: Border.all(color: const Color(0xFFFFB3C1), width: 2.0),
+                                border: Border.all(color: const Color(0xFF9ED8FB), width: 2.0),
                               ),
                               child: Column(
                                 children: [
                                   Text(
                                     line.text,
                                     textAlign: TextAlign.center,
-                                    style: const TextStyle(
-                                      fontSize: 23,
-                                      fontWeight: FontWeight.w900,
-                                      color: Color(0xFFFF407D),
-                                      height: 1.3,
+                                    style: GoogleFonts.fredoka(
+                                      fontSize: 24,
+                                      fontWeight: FontWeight.w700,
+                                      color: const Color(0xFF1E40AF), // deep blue on the sky-blue box
+                                      height: 1.25,
                                     ),
                                   ),
                                   const SizedBox(height: 6),
                                   Text(
                                     line.translation,
                                     textAlign: TextAlign.center,
-                                    style: const TextStyle(
-                                      fontSize: 15.5,
-                                      fontWeight: FontWeight.w700,
-                                      color: Color(0xFF64748B),
+                                    style: GoogleFonts.mitr(
+                                      fontSize: 15,
+                                      fontWeight: FontWeight.w300,
+                                      color: const Color(0xFF4A6491),
                                     ),
                                   ),
                                 ],
                               ),
+                            ),
                             );
                           }
 
-                          return Row(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              Container(
-                                width: 10,
-                                height: 10,
-                                decoration: BoxDecoration(color: line.dotColor, shape: BoxShape.circle),
-                              ),
-                              const SizedBox(width: 10),
-                              Flexible(
-                                child: Text(
-                                  line.text,
-                                  textAlign: TextAlign.center,
-                                  style: const TextStyle(
-                                    fontSize: 21.5,
-                                    fontWeight: FontWeight.w800,
-                                    color: Color(0xFF1E293B),
-                                    height: 1.35,
-                                  ),
+                          // Same box/padding as the highlighted line, so every
+                          // line sits on the same centre (no dots in front).
+                          // All lines in one deep pink; while a line is
+                          // being sung the others fade back a little.
+                          return AnimatedOpacity(
+                            duration: const Duration(milliseconds: 250),
+                            opacity: currentLyricIndex >= 0 ? 0.5 : 1.0,
+                            child: Container(
+                              width: double.infinity,
+                              padding: const EdgeInsets.symmetric(horizontal: 18),
+                              child: Text(
+                                line.text,
+                                textAlign: TextAlign.center,
+                                style: GoogleFonts.fredoka(
+                                  fontSize: 22,
+                                  fontWeight: FontWeight.w600,
+                                  color: const Color(0xFFDB2777), // one deep pink for all lines
+                                  height: 1.3,
                                 ),
                               ),
-                            ],
+                            ),
                           );
-                        },
+                          }),
+                          ),
+                        ),
                       ),
                     ),
                   ],
@@ -886,6 +1638,9 @@ class _KaraokeDetailScreenState extends State<KaraokeDetailScreen> {
           // ขั้นที่ 1: ฟังเสียงตัวอย่างก่อน
           GestureDetector(
             onTap: _togglePlayDemo,
+            // Debug builds only: long-press to measure lyric timings.
+            onLongPress:
+                kDebugMode && widget.song.hasAudio && !_isRecording ? _startSync : null,
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
               decoration: BoxDecoration(
@@ -918,14 +1673,18 @@ class _KaraokeDetailScreenState extends State<KaraokeDetailScreen> {
                           style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: Color(0xFF7C3AED)),
                         ),
                         Text(
-                          _isDemoPlaying ? 'กำลังเปิดเสียงตัวอย่าง...' : 'ฟังเสียงตัวอย่างก่อน',
+                          _isDemoPlaying ? 'กำลังเปิดเสียงตัวอย่าง' : 'ฟังเสียงตัวอย่างก่อน',
                           style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w900, color: Color(0xFF1E293B)),
                         ),
                       ],
                     ),
                   ),
                   Text(
-                    '0:00 / ${widget.song.duration}',
+                    _isDemoPlaying && currentLyricIndex >= 0
+                        ? 'บรรทัด ${currentLyricIndex + 1} / ${widget.song.lyrics.length}'
+                        : _hasDemoFinished
+                        ? 'ฟังจบแล้ว'
+                        : '${widget.song.lyrics.length} บรรทัด',
                     style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700, color: Color(0xFF64748B)),
                   ),
                 ],
@@ -949,16 +1708,18 @@ class _KaraokeDetailScreenState extends State<KaraokeDetailScreen> {
                 );
                 return;
               }
-              _isRecording ? _stopRecording() : _startRecording();
+              _isRecording ? _togglePauseRecording() : _startRecording();
             },
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
               decoration: BoxDecoration(
-                color: _isRecording ? const Color(0xFFFEF2F2) : Colors.white,
+                color: _isRecording
+                    ? (_isPaused ? const Color(0xFFFFF7ED) : const Color(0xFFFEF2F2))
+                    : Colors.white,
                 borderRadius: BorderRadius.circular(18),
                 border: Border.all(
                   color: _isRecording
-                      ? const Color(0xFFEF4444)
+                      ? (_isPaused ? const Color(0xFFF59E0B) : const Color(0xFFEF4444))
                       : (_hasDemoFinished ? const Color(0xFFDDD6FE) : const Color(0xFFE2E8F0)),
                   width: 1.5,
                   style: _hasDemoFinished ? BorderStyle.solid : BorderStyle.none,
@@ -971,12 +1732,12 @@ class _KaraokeDetailScreenState extends State<KaraokeDetailScreen> {
                     height: 44,
                     decoration: BoxDecoration(
                       color: _isRecording
-                          ? const Color(0xFFEF4444)
+                          ? (_isPaused ? const Color(0xFFF59E0B) : const Color(0xFFEF4444))
                           : (_hasDemoFinished ? const Color(0xFF8B5CF6) : const Color(0xFFE2E8F0)),
                       shape: BoxShape.circle,
                     ),
                     child: Icon(
-                      _isRecording ? Icons.stop_rounded : Icons.mic_rounded,
+                      _isRecording && !_isPaused ? Icons.pause_rounded : Icons.mic_rounded,
                       color: Colors.white,
                       size: 26,
                     ),
@@ -996,8 +1757,8 @@ class _KaraokeDetailScreenState extends State<KaraokeDetailScreen> {
                         ),
                         Text(
                           _isRecording
-                              ? 'กำลังบันทึกเสียง... ${_formatDuration(_recordingSeconds)}'
-                              : 'อัดเสียงร้องของหนู',
+                              ? '${_isPaused ? 'พักไว้' : 'กำลังบันทึกเสียง'} ${_formatDuration(_recordingSeconds)} / ${_formatDuration(maxRecordingSeconds)}'
+                              : 'แตะเพื่อเริ่มอัดเสียง',
                           style: TextStyle(
                             fontSize: 15,
                             fontWeight: FontWeight.w900,
@@ -1009,9 +1770,71 @@ class _KaraokeDetailScreenState extends State<KaraokeDetailScreen> {
                             'ฟังเสียงตัวอย่างจบก่อน ปุ่มอัดจึงจะเปิด',
                             style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.w600, color: Color(0xFF94A3B8)),
                           ),
+                        if (_isRecording)
+                          Text(
+                            _isPaused
+                                ? 'แตะไมค์เพื่ออัดต่อ หรือกด เสร็จแล้ว เพื่อบันทึก'
+                                : 'แตะเพื่อพัก • ร้องตามบรรทัดสีชมพู',
+                            style: const TextStyle(fontSize: 11.5, fontWeight: FontWeight.w600, color: Color(0xFF94A3B8)),
+                          ),
+                        if (!_isRecording && _hasSavedTake)
+                          GestureDetector(
+                            onTap: _loadLatestRecording,
+                            child: const Padding(
+                              padding: EdgeInsets.only(top: 2),
+                              child: Text(
+                                'ยกเลิก กลับไปฟังเสียงเดิม',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w800,
+                                  color: Color(0xFF7C3AED),
+                                  decoration: TextDecoration.underline,
+                                ),
+                              ),
+                            ),
+                          ),
                       ],
                     ),
                   ),
+                  if (_isRecording)
+                    // Finish and save (works while recording or paused)
+                    GestureDetector(
+                      onTap: _stopRecording,
+                      child: Container(
+                        padding: const EdgeInsets.only(bottom: 3),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF6D28D9),
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                          decoration: BoxDecoration(
+                            gradient: const LinearGradient(
+                              colors: [Color(0xFF8B5CF6), Color(0xFF7C3AED)],
+                              begin: Alignment.topCenter,
+                              end: Alignment.bottomCenter,
+                            ),
+                            borderRadius: BorderRadius.circular(14),
+                            border: Border.all(color: Colors.white.withValues(alpha: 0.6), width: 1.4),
+                          ),
+                          child: const Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(Icons.check_rounded, color: Colors.white, size: 18),
+                              SizedBox(width: 4),
+                              Text(
+                                'เสร็จแล้ว',
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w900,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
                 ],
               ),
             ),
@@ -1035,8 +1858,6 @@ class _KaraokeDetailScreenState extends State<KaraokeDetailScreen> {
           Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Container(width: 6, height: 6, decoration: const BoxDecoration(color: Color(0xFFFF8DA1), shape: BoxShape.circle)),
-              const SizedBox(width: 6),
               Text(
                 'อัดเสียงเสร็จแล้ว ความยาว ${_formatDuration(_recordingSeconds)}',
                 style: const TextStyle(
@@ -1045,8 +1866,6 @@ class _KaraokeDetailScreenState extends State<KaraokeDetailScreen> {
                   color: Color(0xFF475569),
                 ),
               ),
-              const SizedBox(width: 6),
-              Container(width: 6, height: 6, decoration: const BoxDecoration(color: Color(0xFFFFCA28), shape: BoxShape.circle)),
             ],
           ),
           const SizedBox(height: 12),
@@ -1054,12 +1873,14 @@ class _KaraokeDetailScreenState extends State<KaraokeDetailScreen> {
             children: [
               Expanded(
                 child: GestureDetector(
-                  onTap: () {
+                  onTap: () async {
+                    // Back to step 2; the child starts recording themselves.
+                    // The old take stays until a new one is saved.
+                    await _audioPlayer.stop();
                     setState(() {
                       _recordedFilePath = null;
                       _isPlayingRecord = false;
                     });
-                    _startRecording();
                   },
                   child: Container(
                     height: 48,
@@ -1182,6 +2003,19 @@ class _KaraokeDetailScreenState extends State<KaraokeDetailScreen> {
                     letterSpacing: 0.3,
                   ),
                 ),
+              ),
+            ),
+          ),
+          const SizedBox(height: 4),
+          TextButton.icon(
+            onPressed: _deleteRecording,
+            icon: const Icon(Icons.delete_outline_rounded, color: Color(0xFFE11D48), size: 20),
+            label: const Text(
+              'ลบเสียงนี้',
+              style: TextStyle(
+                color: Color(0xFFE11D48),
+                fontSize: 14,
+                fontWeight: FontWeight.w800,
               ),
             ),
           ),

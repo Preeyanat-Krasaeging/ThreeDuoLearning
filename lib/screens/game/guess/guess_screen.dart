@@ -1,292 +1,24 @@
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
+import '../../../widgets/coin_balance_chip.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 
+import '../../../services/guess_progress_service.dart';
+import 'guess_data.dart';
+import '../../../services/coin_balance.dart';
+import '../../../services/sfx.dart';
+
+/// One question of a round: the picture's word + 4 answer choices.
 class GuessQuestion {
-  final String imagePath;
+  final GuessWord answer;
   final List<String> options;
-  final String correctAnswer;
-  final String thaiMeaning;
 
-  const GuessQuestion({
-    required this.imagePath,
-    required this.options,
-    required this.correctAnswer,
-    required this.thaiMeaning,
-  });
+  const GuessQuestion(this.answer, this.options);
+
+  String get imagePath => answer.imagePath;
+  String get correctAnswer => answer.word;
+  String get thaiMeaning => answer.thai;
 }
-
-class GuessCategory {
-  final String title;
-  final String subtitle;
-  final String imagePath;
-  final String questionFolder;
-  final IconData icon;
-  final Color color;
-
-  const GuessCategory({
-    required this.title,
-    required this.subtitle,
-    required this.imagePath,
-    required this.questionFolder,
-    required this.icon,
-    required this.color,
-  });
-}
-
-const Map<String, String> _animalMeanings = {
-  'Bear': 'หมี',
-  'Bird': 'นก',
-  'Butterfly': 'ผีเสื้อ',
-  'Cat': 'แมว',
-  'Chicken': 'ไก่',
-  'Cow': 'วัว',
-  'Crocodile': 'จระเข้',
-  'Dog': 'สุนัข',
-  'Dolphin': 'โลมา',
-  'Duck': 'เป็ด',
-  'Elephant': 'ช้าง',
-  'Fish': 'ปลา',
-  'Frog': 'กบ',
-  'Giraffe': 'ยีราฟ',
-  'Horse': 'ม้า',
-  'Koala': 'โคอาลา',
-  'Lion': 'สิงโต',
-  'Mosquito': 'ยุง',
-  'Owl': 'นกฮูก',
-  'Peacock': 'นกยูง',
-  'Penguin': 'เพนกวิน',
-  'Pig': 'หมู',
-  'Rabbit': 'กระต่าย',
-  'Sheep': 'แกะ',
-  'Shrimp': 'กุ้ง',
-  'Snake': 'งู',
-  'Spider': 'แมงมุม',
-  'Tiger': 'เสือ',
-  'Turtle': 'เต่า',
-  'Zebra': 'ม้าลาย',
-};
-
-const Map<String, String> _fruitMeanings = {
-  'Apple': 'แอปเปิล',
-  'Apricot': 'แอปริคอต',
-  'Avocado': 'อะโวคาโด',
-  'Banana': 'กล้วย',
-  'Blackberry': 'แบล็กเบอร์รี',
-  'Blueberry': 'บลูเบอร์รี',
-  'Cantaloupe': 'แคนตาลูป',
-  'Cherry': 'เชอร์รี',
-  'Coconut': 'มะพร้าว',
-  'Durian': 'ทุเรียน',
-  'Grape': 'องุ่น',
-  'Guava': 'ฝรั่ง',
-  'Kiwi': 'กีวี',
-  'Lemon': 'เลมอน',
-  'Lime': 'มะนาว',
-  'Longan': 'ลำไย',
-  'Lychee': 'ลิ้นจี่',
-  'Mango': 'มะม่วง',
-  'Mangosteen': 'มังคุด',
-  'Orange': 'ส้ม',
-  'Papaya': 'มะละกอ',
-  'Passion Fruit': 'เสาวรส',
-  'Pineapple': 'สับปะรด',
-  'Pomegranate': 'ทับทิม',
-  'Rambutan': 'เงาะ',
-  'Raspberry': 'ราสป์เบอร์รี',
-  'Rose Apple': 'ชมพู่',
-  'Starfruit': 'มะเฟือง',
-  'Strawberry': 'สตรอว์เบอร์รี',
-  'Watermelon': 'แตงโม',
-};
-
-const Map<String, String> _jobMeanings = {
-  'Artist': 'ศิลปิน',
-  'Athlete': 'นักกีฬา',
-  'Carpenter': 'ช่างไม้',
-  'Chef': 'พ่อครัว / แม่ครัว',
-  'Dancer': 'นักเต้น',
-  'Dentist': 'ทันตแพทย์',
-  'Doctor': 'แพทย์',
-  'Driver': 'คนขับรถ',
-  'Electrician': 'ช่างไฟฟ้า',
-  'Engineer': 'วิศวกร',
-  'Farmer': 'เกษตรกร',
-  'Firefighter': 'นักดับเพลิง',
-  'Fisherman': 'ชาวประมง',
-  'Journalist': 'นักข่าว',
-  'Lawyer': 'ทนายความ',
-  'Musician': 'นักดนตรี',
-  'Nurse': 'พยาบาล',
-  'Pharmacist': 'เภสัชกร',
-  'Photographer': 'ช่างภาพ',
-  'Pilot': 'นักบิน',
-  'Policeofficer': 'ตำรวจ',
-  'Postman': 'บุรุษไปรษณีย์',
-  'Singer': 'นักร้อง',
-  'Soldier': 'ทหาร',
-  'Teacher': 'ครู',
-};
-
-const Map<String, String> _clothingMeanings = {
-  'Backpack': 'กระเป๋าเป้',
-  'Bag': 'กระเป๋าถือ',
-  'Belt': 'เข็มขัด',
-  'Boots': 'รองเท้าบูท',
-  'Cap': 'หมวกแก๊ป',
-  'Dress': 'ชุดเดรส',
-  'Earrings': 'ต่างหู',
-  'Glasses': 'แว่นตา',
-  'Hat': 'หมวก',
-  'Hoodie': 'เสื้อฮู้ด',
-  'Jacket': 'เสื้อแจ็กเก็ต',
-  'Jeans': 'กางเกงยีนส์',
-  'Necklace': 'สร้อยคอ',
-  'Pajamas': 'ชุดนอน',
-  'Pants': 'กางเกงขายาว',
-  'Raincoat': 'เสื้อกันฝน',
-  'Ring': 'แหวน',
-  'Scarf': 'ผ้าพันคอ',
-  'Shirt': 'เสื้อเชิ้ต',
-  'Shoes': 'รองเท้า',
-  'Shorts': 'กางเกงขาสั้น',
-  'Skirt': 'กระโปรง',
-  'Socks': 'ถุงเท้า',
-  'Sunglasses': 'แว่นกันแดด',
-  'Sweater': 'เสื้อกันหนาว',
-  'Swimsuit': 'ชุดว่ายน้ำ',
-  'T-shirt': 'เสื้อยืด',
-  'Tie': 'เนกไท',
-  'Uniform': 'เครื่องแบบ',
-  'Watch': 'นาฬิกาข้อมือ',
-};
-
-const Map<String, String> _sportMeanings = {
-  'Archery': 'ยิงธนู',
-  'Badminton': 'แบดมินตัน',
-  'Baseball': 'เบสบอล',
-  'Basketball': 'บาสเกตบอล',
-  'Bowling': 'โบว์ลิ่ง',
-  'Boxing': 'ชกมวย',
-  'Cycling': 'ปั่นจักรยาน',
-  'Golf': 'กอล์ฟ',
-  'Gymnastics': 'ยิมนาสติก',
-  'Hockey': 'ฮอกกี้',
-  'Rugby': 'รักบี้',
-  'Running': 'วิ่ง',
-  'Skateboarding': 'สเกตบอร์ด',
-  'Soccer': 'ฟุตบอล',
-  'Surfing': 'โต้คลื่น',
-  'Swimming': 'ว่ายน้ำ',
-  'Table Tennis': 'ปิงปอง',
-  'Taekwondo': 'เทควันโด',
-  'Tennis': 'เทนนิส',
-  'Volleyball': 'วอลเลย์บอล',
-};
-
-const Map<String, String> _bodyMeanings = {
-  'Arm': 'แขน',
-  'Belly': 'ท้อง',
-  'Bone': 'กระดูก',
-  'Brain': 'สมอง',
-  'Cheek': 'แก้ม',
-  'Chest': 'หน้าอก',
-  'Chin': 'คาง',
-  'Ear': 'หู',
-  'Eye': 'ตา',
-  'Eyebrow': 'คิ้ว',
-  'Eyelash': 'ขนตา',
-  'Face': 'ใบหน้า',
-  'Finger': 'นิ้วมือ',
-  'Foot': 'เท้า',
-  'Forehead': 'หน้าผาก',
-  'Hair': 'ผม',
-  'Hand': 'มือ',
-  'Head': 'ศีรษะ',
-  'Heart': 'หัวใจ',
-  'Leg': 'ขา',
-  'Lip': 'ริมฝีปาก',
-  'Lungs': 'ปอด',
-  'Mouth': 'ปาก',
-  'Nail': 'เล็บ',
-  'Neck': 'คอ',
-  'Nose': 'จมูก',
-  'Shoulder': 'ไหล่',
-  'Thigh': 'ต้นขา',
-  'Tongue': 'ลิ้น',
-  'Tooth': 'ฟัน',
-};
-
-const Map<String, String> _colorMeanings = {
-  'Beige': 'สีเบจ',
-  'Black': 'สีดำ',
-  'Blue': 'สีน้ำเงิน',
-  'Brown': 'สีน้ำตาล',
-  'Dark Green': 'สีเขียวเข้ม',
-  'Gold': 'สีทอง',
-  'Gray': 'สีเทา',
-  'Green': 'สีเขียว',
-  'Indigo': 'สีคราม',
-  'Light Green': 'สีเขียวอ่อน',
-  'Navy': 'สีกรมท่า',
-  'Orange': 'สีส้ม',
-  'Pink': 'สีชมพู',
-  'Purple': 'สีม่วง',
-  'Red': 'สีแดง',
-  'Silver': 'สีเงิน',
-  'Violet': 'สีม่วงอมฟ้า',
-  'White': 'สีขาว',
-  'Yellow': 'สีเหลือง',
-};
-
-const Map<String, String> _placeMeanings = {
-  'Airport': 'สนามบิน',
-  'Bakery': 'ร้านเบเกอรี่',
-  'Bank': 'ธนาคาร',
-  'Bus Stop': 'ป้ายรถเมล์',
-  'Church': 'โบสถ์',
-  'Cinema': 'โรงภาพยนตร์',
-  'Fire Station': 'สถานีดับเพลิง',
-  'Gas Station': 'ปั๊มน้ำมัน',
-  'Gym': 'โรงยิม',
-  'Home': 'บ้าน',
-  'Hospital': 'โรงพยาบาล',
-  'Hotel': 'โรงแรม',
-  'Library': 'ห้องสมุด',
-  'Market': 'ตลาด',
-  'Mosque': 'มัสยิด',
-  'Museum': 'พิพิธภัณฑ์',
-  'Park': 'สวนสาธารณะ',
-  'Pharmacy': 'ร้านขายยา',
-  'Police Station': 'สถานีตำรวจ',
-  'Post Office': 'ที่ทำการไปรษณีย์',
-  'Restaurant': 'ร้านอาหาร',
-  'School': 'โรงเรียน',
-  'Temple': 'วัด',
-  'Train Station': 'สถานีรถไฟ',
-  'Zoo': 'สวนสัตว์',
-};
-
-const Map<String, String> _vehicleMeanings = {
-  'Airplane': 'เครื่องบิน',
-  'Ambulance': 'รถพยาบาล',
-  'Bicycle': 'จักรยาน',
-  'Boat': 'เรือ',
-  'Bus': 'รถโดยสาร',
-  'Car': 'รถยนต์',
-  'Firetruck': 'รถดับเพลิง',
-  'Helicopter': 'เฮลิคอปเตอร์',
-  'Motorcycle': 'รถจักรยานยนต์',
-  'Rocket': 'จรวด',
-  'Schoolbus': 'รถโรงเรียน',
-  'Ship': 'เรือสินค้า',
-  'Skytrain': 'รถไฟฟ้า',
-  'Submarine': 'เรือดำน้ำ',
-  'Taxi': 'แท็กซี่',
-  'Train': 'รถไฟ',
-  'Truck': 'รถบรรทุก',
-  'Van': 'รถตู้',
-};
 
 class GuessScreen extends StatefulWidget {
   const GuessScreen({super.key});
@@ -297,13 +29,30 @@ class GuessScreen extends StatefulWidget {
 
 class _GuessScreenState extends State<GuessScreen> {
   final FlutterTts _flutterTts = FlutterTts();
+  final math.Random _random = math.Random();
+
+  GuessCategory? _category;
+  List<GuessQuestion> activeQuestions = const [];
   int currentIndex = 0;
-  int score = 0;
+  int correctCount = 0;
+
+  /// Coins the server confirmed in this round / answers waiting for internet.
+  int coinsEarned = 0;
+  int coinsPending = 0;
   String? selectedAnswer;
-  String? selectedCategory;
   bool isAnswerRevealed = false;
   bool isCurrentCorrect = false;
   bool isGameCompleted = false;
+
+  /// For the badges on the category cards.
+  Map<String, int> _bestScores = {};
+  Map<String, ({int index, int total})> _unfinished = {};
+
+  String? get selectedCategory => _category?.title;
+
+  /// Changes for every new round, so a late coin reply of an old round is
+  /// not added to the new one.
+  int _roundId = 0;
 
   static const List<Map<String, dynamic>> _optionThemes = [
     {
@@ -332,6 +81,17 @@ class _GuessScreenState extends State<GuessScreen> {
   void initState() {
     super.initState();
     _initTts();
+    _loadBadges();
+    // Take progress saved on the server (e.g. played on another phone),
+    // then refresh the badges.
+    GuessProgress.sync().then((_) => _loadBadges());
+    GuessCoins.flush(); // coins of answers given while offline
+  }
+
+  @override
+  void dispose() {
+    _flutterTts.stop(); // don't keep talking after leaving the game
+    super.dispose();
   }
 
   Future<void> _initTts() async {
@@ -341,288 +101,292 @@ class _GuessScreenState extends State<GuessScreen> {
   }
 
   Future<void> _speakWord(String text) async {
-    await _flutterTts.stop();
-    await _flutterTts.speak(text);
+    try {
+      await _flutterTts.stop();
+      await _flutterTts.speak(text);
+    } catch (_) {}
   }
 
-  static List<GuessQuestion> _buildAnimalQuestions() {
-    final names = _animalMeanings.keys.toList();
-    return List.generate(names.length, (index) {
-      final answer = names[index];
-      final options = <String>[
-        answer,
-        for (var offset = 1; offset <= 3; offset++)
-          names[(index + offset) % names.length],
-      ]..shuffle();
-      final extension = answer == 'Sheep' || answer == 'Turtle' ? 'webp' : 'png';
-      return GuessQuestion(
-        imagePath: 'assets/images/guess/animal/$answer.$extension',
-        options: options,
-        correctAnswer: answer,
-        thaiMeaning: _animalMeanings[answer]!,
-      );
+  Future<void> _loadBadges() async {
+    final best = await GuessProgress.bestScores();
+    final unfinished = await GuessProgress.unfinished({
+      for (final c in guessCategories) c.id: c.words.map((w) => w.word).toSet(),
     });
-  }
-
-  static List<GuessQuestion> _buildFruitQuestions() {
-    final names = _fruitMeanings.keys.toList();
-    return List.generate(names.length, (index) {
-      final answer = names[index];
-      final options = <String>[
-        answer,
-        for (var offset = 1; offset <= 3; offset++)
-          names[(index + offset) % names.length],
-      ]..shuffle();
-      final fileName = answer == 'Passion Fruit'
-          ? 'Passionfruit'
-          : answer == 'Rose Apple'
-              ? 'Roseapple'
-              : answer;
-
-      return GuessQuestion(
-        imagePath: 'assets/images/guess/fruit/$fileName.png',
-        options: options,
-        correctAnswer: answer,
-        thaiMeaning: _fruitMeanings[answer]!,
-      );
-    });
-  }
-
-  static List<GuessQuestion> _buildJobQuestions() {
-    final names = _jobMeanings.keys.toList();
-    return List.generate(names.length, (index) {
-      final answer = names[index];
-      final options = <String>[
-        answer,
-        for (var offset = 1; offset <= 3; offset++)
-          names[(index + offset) % names.length],
-      ]..shuffle();
-
-      return GuessQuestion(
-        imagePath: 'assets/images/guess/jobs/$answer.png',
-        options: options,
-        correctAnswer: answer,
-        thaiMeaning: _jobMeanings[answer]!,
-      );
-    });
-  }
-
-  static List<GuessQuestion> _buildClothingQuestions() {
-    final names = _clothingMeanings.keys.toList();
-    return List.generate(names.length, (index) {
-      final answer = names[index];
-      final options = <String>[
-        answer,
-        for (var offset = 1; offset <= 3; offset++)
-          names[(index + offset) % names.length],
-      ]..shuffle();
-
-      return GuessQuestion(
-        imagePath: 'assets/images/guess/Clothes/$answer.png',
-        options: options,
-        correctAnswer: answer,
-        thaiMeaning: _clothingMeanings[answer]!,
-      );
-    });
-  }
-
-  static List<GuessQuestion> _buildSportQuestions() {
-    final names = _sportMeanings.keys.toList();
-    return List.generate(names.length, (index) {
-      final answer = names[index];
-      final options = <String>[
-        answer,
-        for (var offset = 1; offset <= 3; offset++)
-          names[(index + offset) % names.length],
-      ]..shuffle();
-      final fileName = answer == 'Soccer'
-          ? 'Sports'
-          : answer == 'Table Tennis'
-              ? 'Tabletennis'
-              : answer;
-
-      return GuessQuestion(
-        imagePath: 'assets/images/guess/Sports/$fileName.png',
-        options: options,
-        correctAnswer: answer,
-        thaiMeaning: _sportMeanings[answer]!,
-      );
-    });
-  }
-
-  static List<GuessQuestion> _buildBodyQuestions() {
-    final names = _bodyMeanings.keys.toList();
-    return List.generate(names.length, (index) {
-      final answer = names[index];
-      final options = <String>[
-        answer,
-        for (var offset = 1; offset <= 3; offset++)
-          names[(index + offset) % names.length],
-      ]..shuffle();
-
-      return GuessQuestion(
-        imagePath: 'assets/images/guess/Body/$answer.png',
-        options: options,
-        correctAnswer: answer,
-        thaiMeaning: _bodyMeanings[answer]!,
-      );
-    });
-  }
-
-  static List<GuessQuestion> _buildColorQuestions() {
-    final names = _colorMeanings.keys.toList();
-    const fileNames = {
-      'Dark Green': 'Darkgreen',
-      'Light Green': 'Lightgreen',
-    };
-    return List.generate(names.length, (index) {
-      final answer = names[index];
-      final options = <String>[
-        answer,
-        for (var offset = 1; offset <= 3; offset++)
-          names[(index + offset) % names.length],
-      ]..shuffle();
-      final fileName = fileNames[answer] ?? answer;
-      final extension = answer == 'Dark Green' ? 'jpg' : 'png';
-
-      return GuessQuestion(
-        imagePath: 'assets/images/guess/Color/$fileName.$extension',
-        options: options,
-        correctAnswer: answer,
-        thaiMeaning: _colorMeanings[answer]!,
-      );
-    });
-  }
-
-  static List<GuessQuestion> _buildPlaceQuestions() {
-    final names = _placeMeanings.keys.toList();
-    const fileNames = {
-      'Bus Stop': 'Busstop',
-      'Fire Station': 'Firestation',
-      'Gas Station': 'Gasstation',
-      'Police Station': 'Policestation',
-      'Post Office': 'Postoffice',
-      'Train Station': 'Trainstation',
-    };
-    return List.generate(names.length, (index) {
-      final answer = names[index];
-      final options = <String>[
-        answer,
-        for (var offset = 1; offset <= 3; offset++)
-          names[(index + offset) % names.length],
-      ]..shuffle();
-      final fileName = fileNames[answer] ?? answer;
-
-      return GuessQuestion(
-        imagePath: 'assets/images/guess/Places/$fileName.png',
-        options: options,
-        correctAnswer: answer,
-        thaiMeaning: _placeMeanings[answer]!,
-      );
-    });
-  }
-
-  static List<GuessQuestion> _buildVehicleQuestions() {
-    final names = _vehicleMeanings.keys.toList();
-    return List.generate(names.length, (index) {
-      final answer = names[index];
-      final options = <String>[
-        answer,
-        for (var offset = 1; offset <= 3; offset++)
-          names[(index + offset) % names.length],
-      ]..shuffle();
-
-      return GuessQuestion(
-        imagePath: 'assets/images/guess/Vehicles/$answer.png',
-        options: options,
-        correctAnswer: answer,
-        thaiMeaning: _vehicleMeanings[answer]!,
-      );
-    });
-  }
-
-  final List<GuessQuestion> questions = [
-    GuessQuestion(
-      imagePath: 'assets/images/vocabulary/family/Grandparents.jpg',
-      options: ['Parents', 'Grandparents', 'Family', 'Teachers'],
-      correctAnswer: 'Grandparents',
-      thaiMeaning: 'ปู่ย่า / ตายาย',
-    ),
-    GuessQuestion(
-      imagePath: 'assets/images/vocabulary/family/Parents.png',
-      options: ['Friends', 'Parents', 'Teachers', 'Doctors'],
-      correctAnswer: 'Parents',
-      thaiMeaning: 'พ่อแม่ / ผู้ปกครอง',
-    ),
-    GuessQuestion(
-      imagePath: 'assets/images/vocabulary/family/Sibling.png',
-      options: ['Sibling', 'Parents', 'Cousin', 'Neighbor'],
-      correctAnswer: 'Sibling',
-      thaiMeaning: 'พี่น้อง',
-    ),
-    ..._buildAnimalQuestions(),
-    ..._buildFruitQuestions(),
-    ..._buildJobQuestions(),
-    ..._buildClothingQuestions(),
-    ..._buildSportQuestions(),
-    ..._buildBodyQuestions(),
-    ..._buildColorQuestions(),
-    ..._buildPlaceQuestions(),
-    ..._buildVehicleQuestions(),
-  ];
-
-  final List<GuessCategory> categories = const [
-    GuessCategory(title: 'สัตว์', imagePath: 'assets/images/Background/animal.webp', questionFolder: 'assets/images/guess/animal/', subtitle: 'เพื่อนตัวน้อยรอบตัวเรา', icon: Icons.pets_rounded, color: Color(0xFF7B68E8)),
-    GuessCategory(title: 'ผลไม้', imagePath: 'assets/images/Background/fruit.png', questionFolder: 'assets/images/guess/fruit/', subtitle: 'ผลไม้สีสันน่ากิน', icon: Icons.local_dining_rounded, color: Color(0xFFC62828)),
-    GuessCategory(title: 'อาชีพ', imagePath: 'assets/images/Background/career.png', questionFolder: 'assets/images/guess/jobs/', subtitle: 'มารู้จักอาชีพต่าง ๆ', icon: Icons.work_rounded, color: Color(0xFFE96554)),
-    GuessCategory(title: 'เครื่องแต่งกาย', imagePath: 'assets/images/Background/clothes.png', questionFolder: 'assets/images/guess/Clothes/', subtitle: 'มาสนุกกับการแต่งตัว', icon: Icons.checkroom_rounded, color: Color(0xFFE85D9E)),
-    GuessCategory(title: 'กีฬา', imagePath: 'assets/images/Background/sport.png', questionFolder: 'assets/images/guess/Sports/', subtitle: 'เกมและกิจกรรมโปรด', icon: Icons.sports_basketball_rounded, color: Color(0xFF009FA8)),
-    GuessCategory(title: 'ร่างกาย', imagePath: 'assets/images/Background/body1.png', questionFolder: 'assets/images/guess/Body/', subtitle: 'รู้จักร่างกายของเรา', icon: Icons.face_rounded, color: Color(0xFFE7B339)),
-    GuessCategory(title: 'สีสัน', imagePath: 'assets/images/Background/color.png', questionFolder: 'assets/images/guess/Color/', subtitle: 'มาสนุกกับสีต่าง ๆ', icon: Icons.palette_rounded, color: Color(0xFF26A36B)),
-    GuessCategory(title: 'สถานที่', imagePath: 'assets/images/Background/location1.png', questionFolder: 'assets/images/guess/Places/', subtitle: 'สถานที่ใกล้ตัว', icon: Icons.location_city_rounded, color: Color(0xFFF28B36)),
-    GuessCategory(title: 'ยานพาหนะ', imagePath: 'assets/images/Background/vehicle.png', questionFolder: 'assets/images/guess/Vehicles/', subtitle: 'ยานพาหนะบนท้องถนน', icon: Icons.local_shipping_rounded, color: Color(0xFF3556C8)),
-  ];
-
-  List<GuessQuestion> get activeQuestions {
-    final category = categories.firstWhere((item) => item.title == selectedCategory);
-    return questions
-        .where((question) => question.imagePath.startsWith(category.questionFolder))
-        .toList();
-  }
-
-  void _startCategory(GuessCategory category) {
+    if (!mounted) return;
     setState(() {
-      selectedCategory = category.title;
-      currentIndex = 0;
+      _bestScores = best;
+      _unfinished = unfinished;
+    });
+  }
+
+  /// 3 wrong choices picked at random from the same category, never a word
+  /// that looks like the answer (or like another choice) in a picture.
+  List<String> _optionsFor(GuessCategory category, GuessWord answer) {
+    final blocked = <String>{answer.word};
+    for (final group in category.lookAlikes) {
+      if (group.contains(answer.word)) blocked.addAll(group);
+    }
+    final pool =
+        category.words
+            .map((w) => w.word)
+            .where((w) => !blocked.contains(w))
+            .toList()
+          ..shuffle(_random);
+    final picks = <String>[];
+    for (final w in pool) {
+      if (picks.length == 3) break;
+      final clash = category.lookAlikes.any(
+        (group) => group.contains(w) && picks.any(group.contains),
+      );
+      if (!clash) picks.add(w);
+    }
+    for (final w in pool) {
+      if (picks.length == 3) break;
+      if (!picks.contains(w)) picks.add(w);
+    }
+    return [answer.word, ...picks]..shuffle(_random);
+  }
+
+  List<GuessQuestion> _buildRound(GuessCategory category, List<String> order) {
+    final byWord = {for (final w in category.words) w.word: w};
+    return [
+      for (final word in order)
+        GuessQuestion(byWord[word]!, _optionsFor(category, byWord[word]!)),
+    ];
+  }
+
+  /// Tapping a category: continue an unfinished round, or start a new one
+  /// (questions and choices are shuffled again every round).
+  Future<void> _onCategoryTap(GuessCategory category) async {
+    final valid = category.words.map((w) => w.word).toSet();
+    final saved = await GuessProgress.load(category.id, valid);
+    if (!mounted) return;
+    if (saved != null) {
+      final resume = await _askResume(category, saved);
+      if (!mounted || resume == null) return;
+      if (resume) {
+        _startRound(
+          category,
+          saved.order,
+          index: saved.index,
+          correct: saved.correct,
+          coins: saved.coins,
+          pending: saved.pending,
+        );
+        return;
+      }
+      await GuessProgress.clear(category.id);
+    }
+    final order = category.words.map((w) => w.word).toList()..shuffle(_random);
+    _startRound(category, order);
+  }
+
+  void _startRound(
+    GuessCategory category,
+    List<String> order, {
+    int index = 0,
+    int correct = 0,
+    int coins = 0,
+    int pending = 0,
+  }) {
+    setState(() {
+      _roundId++;
+      _category = category;
+      activeQuestions = _buildRound(category, order);
+      currentIndex = index;
+      correctCount = correct;
+      coinsEarned = coins;
+      coinsPending = pending;
       selectedAnswer = null;
-      score = 0;
       isAnswerRevealed = false;
       isCurrentCorrect = false;
       isGameCompleted = false;
     });
   }
 
+  /// Back to the category list (progress is already saved after each answer).
+  void _backToCategories() {
+    _flutterTts.stop();
+    setState(() {
+      _roundId++;
+      _category = null;
+      activeQuestions = const [];
+      currentIndex = 0;
+      correctCount = 0;
+      coinsEarned = 0;
+      coinsPending = 0;
+      selectedAnswer = null;
+      isAnswerRevealed = false;
+      isCurrentCorrect = false;
+      isGameCompleted = false;
+    });
+    _loadBadges();
+  }
+
+  int get _percent =>
+      activeQuestions.isEmpty
+          ? 0
+          : (correctCount * 100 / activeQuestions.length).round();
+
+  /// Saves the round: the next question to continue from.
+  Future<void> _saveProgress() async {
+    final category = _category;
+    if (category == null || activeQuestions.isEmpty) return;
+    final next = isAnswerRevealed ? currentIndex + 1 : currentIndex;
+    if (next <= 0) return;
+    if (next >= activeQuestions.length) {
+      // Last question answered: the round is finished.
+      await GuessProgress.clear(category.id);
+      await GuessProgress.saveFinished(category.id, _percent);
+      return;
+    }
+    await GuessProgress.save(
+      category.id,
+      GuessRound(
+        order: activeQuestions.map((q) => q.correctAnswer).toList(),
+        index: next,
+        correct: correctCount,
+        coins: coinsEarned,
+        pending: coinsPending,
+      ),
+    );
+  }
+
+  Future<bool?> _askResume(GuessCategory category, GuessRound saved) {
+    const green = Color(0xFF16A34A);
+    return showDialog<bool>(
+      context: context,
+      builder:
+          (dialogContext) => AlertDialog(
+            backgroundColor: Colors.white,
+            surfaceTintColor: Colors.transparent,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(28),
+              side: const BorderSide(color: Color(0xFFBBF7D0), width: 2.5),
+            ),
+            title: Row(
+              children: [
+                const Icon(Icons.play_circle_fill_rounded, color: green, size: 28),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'หมวด${category.title}',
+                    style: const TextStyle(
+                      fontSize: 20,
+                      fontWeight: FontWeight.w900,
+                      color: Color(0xFF14532D),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            content: Text(
+              'เล่นค้างไว้ที่ข้อ ${saved.index + 1} จาก ${saved.order.length}\n'
+              'ตอบถูกไปแล้ว ${saved.correct} ข้อ จะเล่นต่อเลยไหม ?',
+              style: const TextStyle(
+                fontSize: 15.5,
+                height: 1.5,
+                fontWeight: FontWeight.w600,
+                color: Color(0xFF334155),
+              ),
+            ),
+            actionsPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+            actions: [
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton(
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: green,
+                        side: const BorderSide(color: Color(0xFF86EFAC), width: 2),
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                      ),
+                      onPressed: () => Navigator.pop(dialogContext, false),
+                      child: const Text(
+                        'เริ่มใหม่',
+                        style: TextStyle(fontWeight: FontWeight.w900, fontSize: 15),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: ElevatedButton(
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: green,
+                        foregroundColor: Colors.white,
+                        elevation: 0,
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                      ),
+                      onPressed: () => Navigator.pop(dialogContext, true),
+                      child: const Text(
+                        'เล่นต่อ',
+                        style: TextStyle(fontWeight: FontWeight.w900, fontSize: 15),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+    );
+  }
+
   void _onSelectOption(String option) {
     if (isAnswerRevealed) return;
+    final category = _category;
+    if (category == null) return;
 
     final currentQ = activeQuestions[currentIndex];
     final bool correct = option == currentQ.correctAnswer;
+    final round = _roundId;
 
     setState(() {
       selectedAnswer = option;
       isAnswerRevealed = true;
       isCurrentCorrect = correct;
-      if (correct) score += 10;
+      if (correct) correctCount++;
     });
 
+    correct ? Sfx.correct() : Sfx.wrong();
     _speakWord(currentQ.correctAnswer);
 
-    _showAnswerFeedbackSheet(isCorrect: correct, currentQ: currentQ);
+    // Correct: ask the server for the coin (it checks the answer itself).
+    final Future<GuessCoinResult>? coinFuture =
+        correct
+            ? GuessCoins.submit(
+              categoryId: category.id,
+              word: currentQ.correctAnswer,
+              choice: option,
+            ).then((result) {
+              if (mounted && round == _roundId) {
+                setState(() {
+                  coinsEarned += result.coins;
+                  if (result.pending) coinsPending++;
+                });
+                _saveProgress(); // keep the saved coin count up to date
+              }
+              return result;
+            })
+            : null;
+
+    _saveProgress();
+    _showAnswerFeedbackSheet(
+      isCorrect: correct,
+      currentQ: currentQ,
+      coinFuture: coinFuture,
+    );
   }
 
   void _showAnswerFeedbackSheet({
     required bool isCorrect,
     required GuessQuestion currentQ,
+    Future<GuessCoinResult>? coinFuture,
   }) {
     final Color sheetBg = isCorrect ? const Color(0xFF10B981) : const Color(0xFFEF4444);
     final Color sheetBorder = isCorrect ? const Color(0xFF047857) : const Color(0xFFB91C1C);
@@ -633,7 +397,11 @@ class _GuessScreenState extends State<GuessScreen> {
       enableDrag: false,
       backgroundColor: Colors.transparent,
       builder: (sheetContext) {
-        return Container(
+        // The phone's back button must not close this sheet: the game would
+        // stay on an answered question with every button locked.
+        return PopScope(
+          canPop: false,
+          child: Container(
           padding: const EdgeInsets.fromLTRB(24, 20, 24, 28),
           decoration: BoxDecoration(
             color: sheetBg,
@@ -669,7 +437,7 @@ class _GuessScreenState extends State<GuessScreen> {
               ),
               const SizedBox(height: 10),
               Text(
-                isCorrect ? 'ถูกต้อง เก่งมาก!' : 'ยังไม่ถูกต้อง',
+                isCorrect ? 'ถูกต้อง เก่งมาก !' : 'ยังไม่ถูกต้อง',
                 textAlign: TextAlign.center,
                 style: const TextStyle(
                   fontSize: 25,
@@ -711,13 +479,36 @@ class _GuessScreenState extends State<GuessScreen> {
                         size: 24,
                       ),
                       const SizedBox(width: 8),
-                      Text(
-                        '+10 คะแนน (สะสม: $score)',
-                        style: const TextStyle(
-                          color: Color(0xFF047857),
-                          fontSize: 16,
-                          fontWeight: FontWeight.w900,
-                        ),
+                      FutureBuilder<GuessCoinResult>(
+                        future: coinFuture,
+                        builder: (context, snap) {
+                          final r = snap.data;
+                          final String text;
+                          if (snap.connectionState != ConnectionState.done) {
+                            text = 'กำลังรับเหรียญ...';
+                          } else if (r == null) {
+                            text = 'ตอบถูก 1 ข้อ';
+                          } else if (r.coins > 0) {
+                            text = '+${r.coins} เหรียญ';
+                          } else if (r.pending) {
+                            text = '+$kGameCoinsPerWord เหรียญ (ได้รับเมื่อต่อเน็ต)';
+                          } else if (r.alreadyToday) {
+                            text = 'คำนี้ได้เหรียญไปแล้ววันนี้';
+                          } else {
+                            text = 'ตอบถูก 1 ข้อ';
+                          }
+                          return Flexible(
+                            child: Text(
+                              text,
+                              textAlign: TextAlign.center,
+                              style: const TextStyle(
+                                color: Color(0xFF047857),
+                                fontSize: 16,
+                                fontWeight: FontWeight.w900,
+                              ),
+                            ),
+                          );
+                        },
                       ),
                     ],
                   ),
@@ -744,7 +535,7 @@ class _GuessScreenState extends State<GuessScreen> {
                     text: TextSpan(
                       children: [
                         const TextSpan(
-                          text: 'เฉลย คือ: ',
+                          text: 'เฉลย คือ ',
                           style: TextStyle(
                             fontSize: 16,
                             fontWeight: FontWeight.w700,
@@ -817,6 +608,7 @@ class _GuessScreenState extends State<GuessScreen> {
               ),
             ],
           ),
+        ),
         );
       },
     );
@@ -834,6 +626,7 @@ class _GuessScreenState extends State<GuessScreen> {
       setState(() {
         isGameCompleted = true;
       });
+      Sfx.complete();
     }
   }
 
@@ -841,9 +634,23 @@ class _GuessScreenState extends State<GuessScreen> {
   Widget _buildSummaryScreen() {
     const Color victoryBgTop = Color(0xFF10B981);
     const Color victoryBgBottom = Color(0xFF047857);
-    final int totalQuestions = activeQuestions.length;
-    final int correctCount = (score / 10).round();
-    final int percentage = totalQuestions > 0 ? ((correctCount / totalQuestions) * 100).round() : 100;
+    final int percentage = _percent;
+    // Stars and message follow the score (it used to say "เก่งมาก" with
+    // 3 stars even when nothing was right).
+    final int stars =
+        percentage >= 80
+            ? 3
+            : percentage >= 50
+            ? 2
+            : percentage > 0
+            ? 1
+            : 0;
+    final String headline =
+        percentage >= 80
+            ? 'เก่งมาก ยอดเยี่ยม'
+            : percentage >= 50
+            ? 'ทำได้ดีมาก !'
+            : 'สู้ ๆ นะ ลองอีกครั้ง';
 
     return Scaffold(
       body: Container(
@@ -908,8 +715,8 @@ class _GuessScreenState extends State<GuessScreen> {
                     const Spacer(),
                     Center(
                       child: SizedBox(
-                        width: 270,
-                        height: 270,
+                        width: 220,
+                        height: 220,
                         child: Image.asset(
                           'assets/images/character/bravo.png',
                           fit: BoxFit.contain,
@@ -926,18 +733,18 @@ class _GuessScreenState extends State<GuessScreen> {
                       mainAxisAlignment: MainAxisAlignment.center,
                       crossAxisAlignment: CrossAxisAlignment.end,
                       children: [
-                        _buildStarIcon(56),
+                        _buildStarIcon(56, filled: stars >= 1),
                         const SizedBox(width: 8),
-                        _buildStarIcon(76),
+                        _buildStarIcon(76, filled: stars >= 2),
                         const SizedBox(width: 8),
-                        _buildStarIcon(56),
+                        _buildStarIcon(56, filled: stars >= 3),
                       ],
                     ),
                     const SizedBox(height: 14),
-                    const Text(
-                      'เก่งมาก ยอดเยี่ยม',
+                    Text(
+                      headline,
                       textAlign: TextAlign.center,
-                      style: TextStyle(
+                      style: const TextStyle(
                         fontSize: 38,
                         fontWeight: FontWeight.w900,
                         color: Colors.white,
@@ -963,7 +770,7 @@ class _GuessScreenState extends State<GuessScreen> {
                         ),
                       ),
                       child: Text(
-                        'คุณเล่นเกมหมวด "$selectedCategory" เสร็จแล้ว!',
+                        'หมวด$selectedCategory ตอบถูก $correctCount จาก ${activeQuestions.length} ข้อ',
                         textAlign: TextAlign.center,
                         style: const TextStyle(
                           fontSize: 17.5,
@@ -1008,16 +815,18 @@ class _GuessScreenState extends State<GuessScreen> {
                                 ),
                                 const SizedBox(height: 6),
                                 Text(
-                                  '+$score',
+                                  '+$coinsEarned',
                                   style: const TextStyle(
                                     fontSize: 24,
                                     fontWeight: FontWeight.w900,
                                     color: Colors.white,
                                   ),
                                 ),
-                                const Text(
-                                  'เหรียญที่ได้รับ',
-                                  style: TextStyle(
+                                Text(
+                                  coinsPending > 0
+                                      ? 'เหรียญ (+${coinsPending * kGameCoinsPerWord} รอต่อเน็ต)'
+                                      : 'เหรียญที่ได้รับ',
+                                  style: const TextStyle(
                                     fontSize: 12.5,
                                     fontWeight: FontWeight.bold,
                                     color: Colors.white70,
@@ -1084,15 +893,37 @@ class _GuessScreenState extends State<GuessScreen> {
                     const SizedBox(height: 22),
                     GestureDetector(
                       onTap: () {
-                        setState(() {
-                          selectedCategory = null;
-                          currentIndex = 0;
-                          selectedAnswer = null;
-                          score = 0;
-                          isAnswerRevealed = false;
-                          isGameCompleted = false;
-                        });
+                        final category = _category;
+                        if (category != null) _onCategoryTap(category);
                       },
+                      child: Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.symmetric(vertical: 13),
+                        decoration: BoxDecoration(
+                          color: Colors.white.withValues(alpha: 0.2),
+                          borderRadius: BorderRadius.circular(24),
+                          border: Border.all(color: Colors.white70, width: 2),
+                        ),
+                        child: const Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(Icons.replay_rounded, color: Colors.white, size: 22),
+                            SizedBox(width: 8),
+                            Text(
+                              'เล่นหมวดนี้อีกครั้ง',
+                              style: TextStyle(
+                                fontSize: 17,
+                                fontWeight: FontWeight.w900,
+                                color: Colors.white,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    GestureDetector(
+                      onTap: _backToCategories,
                       child: Container(
                         width: double.infinity,
                         padding: const EdgeInsets.symmetric(vertical: 16),
@@ -1117,7 +948,7 @@ class _GuessScreenState extends State<GuessScreen> {
                             Icon(Icons.home_rounded, color: Colors.white, size: 24),
                             SizedBox(width: 8),
                             Text(
-                              'รับคะแนน & กลับหน้าหลัก',
+                              'กลับหน้าเลือกหมวด',
                               style: TextStyle(
                                 fontSize: 18,
                                 fontWeight: FontWeight.w900,
@@ -1139,14 +970,14 @@ class _GuessScreenState extends State<GuessScreen> {
     );
   }
 
-  Widget _buildStarIcon(double size) {
+  Widget _buildStarIcon(double size, {bool filled = true}) {
     return Icon(
       Icons.star_rounded,
-      color: const Color(0xFFFBBF24),
+      color: filled ? const Color(0xFFFBBF24) : Colors.white.withValues(alpha: 0.35),
       size: size,
-      shadows: const [
+      shadows: [
         Shadow(
-          color: Color(0xFFD97706),
+          color: filled ? const Color(0xFFD97706) : Colors.black12,
           offset: Offset(0, 3.5),
           blurRadius: 0,
         ),
@@ -1154,9 +985,69 @@ class _GuessScreenState extends State<GuessScreen> {
     );
   }
 
+  /// "เล่นต่อ 5/30" for an unfinished round, a green tick for a finished
+  /// category, nothing for a new one.
+  Widget _categoryBadge(GuessCategory category) {
+    final unfinished = _unfinished[category.id];
+    final best = _bestScores[category.id];
+    if (unfinished == null && best == null) return const SizedBox.shrink();
+    if (unfinished == null) {
+      // Finished: just a green tick (same as the practiced cards in Phonics).
+      return Container(
+        width: 26,
+        height: 26,
+        decoration: BoxDecoration(
+          color: const Color(0xFF22C55E),
+          shape: BoxShape.circle,
+          border: Border.all(color: Colors.white, width: 2.5),
+          boxShadow: const [
+            BoxShadow(color: Colors.black26, blurRadius: 3, offset: Offset(0, 1.5)),
+          ],
+        ),
+        child: const Icon(Icons.check_rounded, size: 16, color: Colors.white),
+      );
+    }
+    // Only an unfinished round reaches this point (finished ones returned above).
+    const Color color = Color(0xFFF59E0B);
+    final String text = 'เล่นต่อ ${unfinished.index + 1} / ${unfinished.total}';
+    return Container(
+      padding: const EdgeInsets.fromLTRB(6, 3, 8, 3),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.12),
+            blurRadius: 3,
+            offset: const Offset(0, 1.5),
+          ),
+        ],
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            Icons.play_arrow_rounded,
+            size: 14,
+            color: color,
+          ),
+          const SizedBox(width: 3),
+          Text(
+            text,
+            style: TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.w900,
+              color: color,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   // ================= หน้าจอเลือกหมวดหมู่ =================
   Widget _buildCategorySelectionScreen() {
-    final List<GuessCategory> displayCategories = [...categories];
+    const List<GuessCategory> displayCategories = guessCategories;
     const topBarColor = Color(0xFF16A34A);
 
     return Scaffold(
@@ -1195,6 +1086,8 @@ class _GuessScreenState extends State<GuessScreen> {
                           ),
                         ),
                       ),
+                      // Same width as the coin chip on the right, so the title stays centred.
+                      const SizedBox(width: CoinBalanceChip.width - 38),
                       const Expanded(
                         child: Text(
                           'ทายภาพ',
@@ -1207,7 +1100,7 @@ class _GuessScreenState extends State<GuessScreen> {
                           ),
                         ),
                       ),
-                      const SizedBox(width: 44),
+                      const CoinBalanceChip(),
                     ],
                   ),
                 ),
@@ -1269,7 +1162,7 @@ class _GuessScreenState extends State<GuessScreen> {
 
                           return InkWell(
                             borderRadius: BorderRadius.circular(24),
-                            onTap: () => _startCategory(category),
+                            onTap: () => _onCategoryTap(category),
                             child: Container(
                               decoration: BoxDecoration(
                                 color: Colors.white,
@@ -1287,22 +1180,32 @@ class _GuessScreenState extends State<GuessScreen> {
                               child: Column(
                                 children: [
                                   Expanded(
-                                    child: Container(
-                                      width: double.infinity,
-                                      decoration: BoxDecoration(
-                                        gradient: LinearGradient(
-                                          begin: Alignment.topLeft,
-                                          end: Alignment.bottomRight,
-                                          colors: [imageBackground, imageBackgroundLight],
+                                    child: Stack(
+                                      children: [
+                                        Positioned.fill(
+                                          child: Container(
+                                            decoration: BoxDecoration(
+                                              gradient: LinearGradient(
+                                                begin: Alignment.topLeft,
+                                                end: Alignment.bottomRight,
+                                                colors: [imageBackground, imageBackgroundLight],
+                                              ),
+                                            ),
+                                            padding: const EdgeInsets.all(8),
+                                            child: Image.asset(
+                                              category.imagePath,
+                                              fit: BoxFit.contain,
+                                              errorBuilder: (context, error, stackTrace) =>
+                                                  const SizedBox.expand(),
+                                            ),
+                                          ),
                                         ),
-                                      ),
-                                      padding: const EdgeInsets.all(8),
-                                      child: Image.asset(
-                                        category.imagePath,
-                                        fit: BoxFit.contain,
-                                        errorBuilder: (context, error, stackTrace) =>
-                                            const SizedBox.expand(),
-                                      ),
+                                        Positioned(
+                                          top: 8,
+                                          right: 8,
+                                          child: _categoryBadge(category),
+                                        ),
+                                      ],
                                     ),
                                   ),
                                   Container(
@@ -1343,9 +1246,19 @@ class _GuessScreenState extends State<GuessScreen> {
   // ================= หน้าจอเล่นเกม =================
   @override
   Widget build(BuildContext context) {
-    if (selectedCategory == null) return _buildCategorySelectionScreen();
-    if (isGameCompleted) return _buildSummaryScreen();
+    if (_category == null) return _buildCategorySelectionScreen();
+    // In a round, the phone's back button goes to the category list (like
+    // the arrow at the top), not out of the whole game.
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop) _backToCategories();
+      },
+      child: isGameCompleted ? _buildSummaryScreen() : _buildGameScreen(),
+    );
+  }
 
+  Widget _buildGameScreen() {
     final GuessQuestion currentQ = activeQuestions[currentIndex];
     final double progress = (currentIndex + 1) / activeQuestions.length;
     const Color headerGreen = Color(0xFF16A34A);
@@ -1369,17 +1282,7 @@ class _GuessScreenState extends State<GuessScreen> {
                       color: Colors.transparent,
                       child: InkWell(
                         borderRadius: BorderRadius.circular(20),
-                        onTap: () {
-                          setState(() {
-                            selectedCategory = null;
-                            currentIndex = 0;
-                            selectedAnswer = null;
-                            score = 0;
-                            isAnswerRevealed = false;
-                            isCurrentCorrect = false;
-                            isGameCompleted = false;
-                          });
-                        },
+                        onTap: _backToCategories,
                         child: const Padding(
                           padding: EdgeInsets.all(8.0),
                           child: Icon(
@@ -1390,6 +1293,8 @@ class _GuessScreenState extends State<GuessScreen> {
                         ),
                       ),
                     ),
+                    // Same width as the coin chip on the right, so the title stays centred.
+                    const SizedBox(width: CoinBalanceChip.width - 38),
                     const Expanded(
                       child: Text(
                         'ทายภาพ',
@@ -1402,7 +1307,7 @@ class _GuessScreenState extends State<GuessScreen> {
                         ),
                       ),
                     ),
-                    const SizedBox(width: 38),
+                    const CoinBalanceChip(),
                   ],
                 ),
               ),
@@ -1475,7 +1380,7 @@ class _GuessScreenState extends State<GuessScreen> {
                                     ),
                                   ),
                                   TextSpan(
-                                    text: '/${activeQuestions.length}',
+                                    text: ' / ${activeQuestions.length}',
                                     style: const TextStyle(
                                       color: Color(0xFF64748B),
                                     ),
@@ -1586,8 +1491,8 @@ class _GuessScreenState extends State<GuessScreen> {
                   // ข้อความ "ภาพนี้คืออะไรเอ่ย?"
                   Text(
                     isAnswerRevealed
-                        ? 'เฉลย: ${currentQ.correctAnswer} (${currentQ.thaiMeaning})'
-                        : 'ภาพนี้คืออะไรเอ่ย?',
+                        ? 'เฉลย : ${currentQ.correctAnswer} (${currentQ.thaiMeaning})'
+                        : 'ภาพนี้คืออะไรเอ่ย ?',
                     style: TextStyle(
                       fontSize: 22,
                       fontWeight: FontWeight.w900,
@@ -1679,10 +1584,13 @@ class _GuessScreenState extends State<GuessScreen> {
                                   ),
                                   const SizedBox(width: 8),
                                   Expanded(
-                                    child: Text(
+                                    // Long words (Skateboarding, Police Station)
+                                    // shrink to fit instead of being cut off.
+                                    child: FittedBox(
+                                      fit: BoxFit.scaleDown,
+                                      child: Text(
                                       option,
                                       maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
                                       textAlign: TextAlign.center,
                                       style: const TextStyle(
                                         color: Colors.white,
@@ -1697,6 +1605,7 @@ class _GuessScreenState extends State<GuessScreen> {
                                           ),
                                         ],
                                       ),
+                                    ),
                                     ),
                                   ),
                                 ],

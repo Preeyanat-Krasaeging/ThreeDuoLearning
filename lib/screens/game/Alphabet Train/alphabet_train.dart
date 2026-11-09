@@ -2,30 +2,12 @@ import 'dart:async';
 import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter_tts/flutter_tts.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 
-void main() {
-  runApp(const MyApp());
-}
-
-class MyApp extends StatelessWidget {
-  const MyApp({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    return MaterialApp(
-      debugShowCheckedModeBanner: false,
-      title: 'Alphabet Snake',
-      theme: ThemeData(
-        fontFamily: 'Mitr',
-        useMaterial3: true,
-      ),
-      home: const MainMenuScreen(),
-    );
-  }
-}
+import '../../../services/alphabet_train_service.dart';
+import '../../../services/coin_balance.dart';
+import '../../../services/guess_progress_service.dart' show GuessCoinResult;
+import '../../../services/sfx.dart';
 
 // ==========================================
 // Helpers & Utilities
@@ -67,7 +49,6 @@ class _BouncyTapState extends State<BouncyTap> {
 // ==========================================
 // 0. ตั้งค่าด่าน & ระบบบันทึกความก้าวหน้า
 // ==========================================
-/// ธีมโลก: ทุก 10 ด่านเปลี่ยนโลกใหม่ (สีฉาก สีงู ของลอยๆ)
 class WorldTheme {
   final String name;
   final String emoji;
@@ -109,13 +90,23 @@ class LevelConfig {
   static const int maxStars = maxLevel * starsPerLevel;
 
   static int missingCountForLevel(int level) {
-    if (level <= 34) return 1 + (level - 1) ~/ 3; // 1 → 12 ช่อง (เหมือนเดิม)
-    return min(16, 12 + (level - 34) ~/ 4); // ด่าน 35-50: 12 → 16 ช่อง
+    if (level <= 34) return 1 + (level - 1) ~/ 3;
+    return min(16, 12 + (level - 34) ~/ 4);
   }
 
+  // 10 s + time for each missing letter (less per letter in later worlds),
+  // so every level stays possible and gets harder step by step.
   static int timeForLevel(int level) {
-    if (level <= 40) return max(15, 65 - level * 2); // ด่าน 1-40 เหมือนเดิม
-    return 15 + (missingCountForLevel(level) - 10) * 3; // ด่าน 41-50 เวลาเพิ่มตามจำนวนช่อง
+    final int perLetter = level <= 10
+        ? 8
+        : level <= 20
+            ? 7
+            : level <= 30
+                ? 6
+                : level <= 40
+                    ? 5
+                    : 4;
+    return 10 + missingCountForLevel(level) * perLetter;
   }
 
   static int optionCountForLevel(int level) => min(6, 3 + (level - 1) ~/ 8);
@@ -201,7 +192,6 @@ class LevelConfig {
   static int worldIndexFor(int level) => max(0, min(worlds.length - 1, (level - 1) ~/ levelsPerWorld));
   static WorldTheme worldFor(int level) => worlds[worldIndexFor(level)];
 
-  // ไอคอนการ์ตูนประจำด่าน
   static const List<String> levelMascots = [
     '🍎', '🐱', '🐰', '🐼', '🦊', '🦁', '🐸', '🦄', '🐝', '🐥',
     '🐶', '🐻', '🐨', '🐯', '🐵', '🐙', '🐬', '🦋', '🐧', '🦉',
@@ -211,10 +201,8 @@ class LevelConfig {
   ];
 }
 
+/// Stars per level, per account, kept on the server too (see AlphabetLevels).
 class GameProgress {
-  static const String _kUnlocked = 'unlocked_level';
-  static String _starsKey(int level) => 'level_stars_$level';
-
   final int unlockedLevel;
   final List<int> stars;
 
@@ -226,170 +214,20 @@ class GameProgress {
   int get totalStars => stars.fold(0, (sum, s) => sum + s);
   int starsOf(int level) => stars[level - 1];
 
-  static int _clampInt(int v, int lo, int hi) => max(lo, min(hi, v));
-
   static Future<GameProgress> load() async {
-    final prefs = await SharedPreferences.getInstance();
-    return GameProgress(
-      unlockedLevel: _clampInt(prefs.getInt(_kUnlocked) ?? 1, 1, LevelConfig.maxLevel),
-      stars: List.generate(
-        LevelConfig.maxLevel,
-        (i) => _clampInt(prefs.getInt(_starsKey(i + 1)) ?? 0, 0, LevelConfig.starsPerLevel),
-      ),
-    );
+    final stars = await AlphabetLevels.load();
+    return GameProgress(unlockedLevel: AlphabetLevels.unlockedLevel(stars), stars: stars);
   }
 
   static Future<void> saveLevelResult({
     required int level,
     required int stars,
-  }) async {
-    final prefs = await SharedPreferences.getInstance();
-
-    final prevStars = prefs.getInt(_starsKey(level)) ?? 0;
-    if (stars > prevStars) {
-      await prefs.setInt(_starsKey(level), stars);
-    }
-
-    final unlocked = prefs.getInt(_kUnlocked) ?? 1;
-    final next = min(level + 1, LevelConfig.maxLevel);
-    if (next > unlocked) {
-      await prefs.setInt(_kUnlocked, next);
-    }
-  }
+  }) =>
+      AlphabetLevels.record(level, stars);
 }
 
 // ==========================================
-// 1. หน้าเมนูหลัก (Main Menu) ตกแต่งตัวการ์ตูนจัดเต็ม
-// ==========================================
-class MainMenuScreen extends StatelessWidget {
-  const MainMenuScreen({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      body: Container(
-        width: double.infinity,
-        decoration: const BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-            colors: [Color(0xFF38BDF8), Color(0xFFBAE6FD), Color(0xFFFBCFE8)],
-          ),
-        ),
-        child: SafeArea(
-          child: Stack(
-            children: [
-              // ตกแต่งพื้นหลังลอยๆ
-              const Positioned(top: 40, left: 20, child: Text('☁️', style: TextStyle(fontSize: 40))),
-              const Positioned(top: 80, right: 30, child: Text('🌈', style: TextStyle(fontSize: 45))),
-              const Positioned(top: 180, left: 35, child: Text('✨', style: TextStyle(fontSize: 28))),
-              const Positioned(top: 220, right: 40, child: Text('🎈', style: TextStyle(fontSize: 32))),
-              
-              Column(
-                children: [
-                  const _CoinPillBar(padding: EdgeInsets.fromLTRB(0, 12, 16, 0)),
-                  const Spacer(),
-                  
-                  // Mascot น้องงูเขียวตัวโตน่ารัก
-                  Stack(
-                    alignment: Alignment.center,
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.all(28),
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          shape: BoxShape.circle,
-                          boxShadow: [
-                            BoxShadow(color: const Color(0xFF0284C7).withOpacity(0.3), blurRadius: 24, offset: const Offset(0, 12)),
-                          ],
-                        ),
-                        child: const Text('🐍', style: TextStyle(fontSize: 96)),
-                      ),
-                      const Positioned(top: 0, right: 10, child: Text('👑', style: TextStyle(fontSize: 42))),
-                      const Positioned(bottom: 0, left: 0, child: Text('🐥', style: TextStyle(fontSize: 36))),
-                    ],
-                  ),
-                  const SizedBox(height: 20),
-                  const Text(
-                    'Alphabet Snake',
-                    style: TextStyle(
-                      fontSize: 40,
-                      fontWeight: FontWeight.w900,
-                      color: Color(0xFF0284C7),
-                      shadows: [
-                        Shadow(offset: Offset(0, 3), blurRadius: 0, color: Colors.white),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
-                    decoration: BoxDecoration(
-                      color: Colors.white.withOpacity(0.95),
-                      borderRadius: BorderRadius.circular(24),
-                      boxShadow: const [BoxShadow(color: Colors.black12, blurRadius: 8, offset: Offset(0, 4))],
-                    ),
-                    child: Text(
-                      '🎮 ผจญภัยต่ออักษรภาษาอังกฤษ (${LevelConfig.maxLevel} ด่าน)',
-                      style: TextStyle(fontSize: 15, fontWeight: FontWeight.w800, color: Color(0xFF0F172A)),
-                    ),
-                  ),
-                  const Spacer(),
-                  
-                  // Mascot ตกแต่งข้างปุ่มเล่น
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      const Text('🐰', style: TextStyle(fontSize: 36)),
-                      const SizedBox(width: 8),
-                      BouncyTap(
-                        onTap: () {
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute<void>(builder: (_) => const AlphabetTrain()),
-                          );
-                        },
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 46, vertical: 18),
-                          decoration: BoxDecoration(
-                            gradient: const LinearGradient(
-                              colors: [Color(0xFF4ADE80), Color(0xFF16A34A)],
-                              begin: Alignment.topCenter,
-                              end: Alignment.bottomCenter,
-                            ),
-                            borderRadius: BorderRadius.circular(32),
-                            border: Border.all(color: Colors.white, width: 3.5),
-                            boxShadow: [
-                              BoxShadow(color: darken(const Color(0xFF16A34A)), offset: const Offset(0, 7)),
-                              BoxShadow(color: const Color(0xFF22C55E).withOpacity(0.4), blurRadius: 16, offset: const Offset(0, 10)),
-                            ],
-                          ),
-                          child: const Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Text('เริ่มเล่นเลย ', style: TextStyle(fontSize: 24, fontWeight: FontWeight.w900, color: Colors.white)),
-                              Icon(Icons.play_arrow_rounded, size: 36, color: Colors.white),
-                            ],
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      const Text('🐻', style: TextStyle(fontSize: 36)),
-                    ],
-                  ),
-                  const Spacer(),
-                ],
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-// ==========================================
-// 1.1 หน้าเลือกด่าน 50 ด่าน (Wonderland Cartoon World)
+// 1.1 หน้าเลือกด่าน 50 ด่าน
 // ==========================================
 class LevelSelectScreen extends StatefulWidget {
   const LevelSelectScreen({super.key});
@@ -401,18 +239,28 @@ class LevelSelectScreen extends StatefulWidget {
 class _LevelSelectScreenState extends State<LevelSelectScreen> {
   GameProgress? _progress;
   int _selectedLevel = 1;
+  Set<int> _unfinished = {}; // levels left in the middle
+  bool _userPicked = false; // the child chose a level: don't move the choice
+  bool _opening = false; // a game is being opened (no double taps)
 
   @override
   void initState() {
     super.initState();
     _loadProgress(selectHighest: true);
+    if (CoinBalance.value.value == null) CoinBalance.refresh();
+    // Stars from the server (after reinstalling / another phone).
+    Future.wait([AlphabetLevels.sync(), AlphabetResume.sync()]).then((_) {
+      if (mounted) _loadProgress(selectHighest: !_userPicked);
+    });
   }
 
   Future<void> _loadProgress({bool selectHighest = false}) async {
     final p = await GameProgress.load();
+    final unfinished = await alphabetUnfinishedLevels(LevelConfig.missingCountForLevel);
     if (!mounted) return;
     setState(() {
       _progress = p;
+      _unfinished = unfinished;
       if (selectHighest || _selectedLevel > p.unlockedLevel) {
         _selectedLevel = p.unlockedLevel;
       }
@@ -420,9 +268,34 @@ class _LevelSelectScreenState extends State<LevelSelectScreen> {
   }
 
   Future<void> _play() async {
+    if (_opening) return;
+    _opening = true;
+    try {
+      await _openLevel();
+    } finally {
+      _opening = false;
+    }
+  }
+
+  Future<void> _openLevel() async {
+    final level = _selectedLevel;
+    AlphabetRound? resume =
+        await AlphabetResume.load(level, LevelConfig.missingCountForLevel(level));
+    if (!mounted) return;
+    if (resume != null) {
+      final choice = await _askResume(level, resume);
+      if (!mounted || choice == null) return;
+      if (!choice) {
+        await AlphabetResume.clear(level);
+        resume = null;
+      }
+    }
+    if (!mounted) return;
     final reached = await Navigator.push<int>(
       context,
-      MaterialPageRoute<int>(builder: (_) => AlphabetGameScreen(initialStage: _selectedLevel)),
+      MaterialPageRoute<int>(
+        builder: (_) => AlphabetGameScreen(initialStage: level, resume: resume),
+      ),
     );
     if (!mounted) return;
     await _loadProgress();
@@ -433,8 +306,74 @@ class _LevelSelectScreenState extends State<LevelSelectScreen> {
     }
   }
 
+  Future<bool?> _askResume(int level, AlphabetRound saved) {
+    const color = Color(0xFFE5334B);
+    return showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        backgroundColor: Colors.white,
+        surfaceTintColor: Colors.transparent,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(28),
+          side: BorderSide(color: color.withValues(alpha: 0.35), width: 2.5),
+        ),
+        title: Row(
+          children: [
+            const Icon(Icons.play_circle_fill_rounded, color: color, size: 28),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                'ด่าน $level เล่นค้างไว้',
+                style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w900, color: Color(0xFF1E293B)),
+              ),
+            ),
+          ],
+        ),
+        content: Text(
+          'เติมไปแล้ว ${saved.done} / ${saved.missing.length} ตัว '
+          'เหลือเวลา ${saved.remaining} วินาที\nจะเล่นต่อเลยไหม ?',
+          style: const TextStyle(fontSize: 15.5, height: 1.5, fontWeight: FontWeight.w600, color: Color(0xFF334155)),
+        ),
+        actionsPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+        actions: [
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton(
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: color,
+                    side: BorderSide(color: color.withValues(alpha: 0.5), width: 2),
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                  ),
+                  onPressed: () => Navigator.pop(dialogContext, false),
+                  child: const Text('เริ่มใหม่', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 15)),
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: color,
+                    foregroundColor: Colors.white,
+                    elevation: 0,
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                  ),
+                  onPressed: () => Navigator.pop(dialogContext, true),
+                  child: const Text('เล่นต่อ', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 15)),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
   void _onLevelTap(int level, bool unlocked) {
     if (unlocked) {
+      _userPicked = true;
       setState(() => _selectedLevel = level);
       return;
     }
@@ -447,7 +386,7 @@ class _LevelSelectScreenState extends State<LevelSelectScreen> {
         backgroundColor: const Color(0xFFFF3366),
         duration: const Duration(milliseconds: 1200),
         content: const Text(
-          '🔒 ผ่านด่านก่อนหน้าเพื่อปลดล็อคด่านนี้นะ!',
+          'ผ่านด่านก่อนหน้าเพื่อปลดล็อคด่านนี้นะ',
           textAlign: TextAlign.center,
           style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white),
         ),
@@ -496,7 +435,6 @@ class _LevelSelectScreenState extends State<LevelSelectScreen> {
     );
   }
 
-  // ---------- แถวบน: ดาวสะสม + เหรียญ ----------
   Widget _buildTopBar(GameProgress p) {
     final done = p.stars.where((s) => s > 0).length;
     return Padding(
@@ -505,157 +443,142 @@ class _LevelSelectScreenState extends State<LevelSelectScreen> {
         children: [
           _buildStarBadge(done),
           const Spacer(),
-          _buildCoinBadge(0),
+          _buildCoinBadge(),
         ],
       ),
     );
   }
 
   BoxDecoration get _creamPillDecoration => BoxDecoration(
-        color: const Color(0xFFFFF4DA).withOpacity(0.95),
+        color: const Color(0xFFFFF4DA).withValues(alpha: 0.95),
         borderRadius: BorderRadius.circular(24),
         border: Border.all(color: const Color(0xFFF3DDAE), width: 2),
         boxShadow: [
-          BoxShadow(color: const Color(0xFFB8860B).withOpacity(0.25), offset: const Offset(0, 3), blurRadius: 4),
+          BoxShadow(color: const Color(0xFFB8860B).withValues(alpha: 0.25), offset: const Offset(0, 3), blurRadius: 4),
         ],
       );
 
   Widget _buildStarBadge(int done) {
     return SizedBox(
       height: 50,
-      child: Stack(
-        clipBehavior: Clip.none,
-        alignment: Alignment.centerLeft,
-        children: [
-          Container(
-            margin: const EdgeInsets.only(left: 24),
-            padding: const EdgeInsets.fromLTRB(34, 6, 20, 6),
-            decoration: _creamPillDecoration,
-            child: Text(
-              '$done/${LevelConfig.maxLevel}',
-              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w900, color: Color(0xFF7A4B1E)),
-            ),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 6),
+        decoration: _creamPillDecoration,
+        child: Center(
+          child: Text(
+            '$done / ${LevelConfig.maxLevel}',
+            style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w900, color: Color(0xFF7A4B1E)),
           ),
-          Positioned(
-            left: 0,
-            top: 0,
-            child: SizedBox(
-              width: 52,
-              height: 50,
-              child: Stack(
-                alignment: Alignment.center,
-                children: const [
-                  Icon(Icons.star_rounded, size: 52, color: Color(0xFFD98E1F)),
-                  Icon(Icons.star_rounded, size: 44, color: Color(0xFFFFC83D)),
-                ],
-              ),
-            ),
-          ),
-        ],
+        ),
       ),
     );
   }
 
-  Widget _buildCoinBadge(int coins) {
+  Widget _buildCoinBadge() {
     return SizedBox(
       height: 50,
-      child: Stack(
-        clipBehavior: Clip.none,
-        alignment: Alignment.centerLeft,
-        children: [
-          Container(
-            margin: const EdgeInsets.only(left: 26),
-            padding: const EdgeInsets.fromLTRB(32, 6, 18, 6),
-            decoration: _creamPillDecoration,
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(minWidth: 40),
-              child: Text(
-                '$coins',
-                textAlign: TextAlign.right,
-                style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w900, color: Color(0xFF7A4B1E)),
+      child: Container(
+        padding: const EdgeInsets.fromLTRB(8, 6, 20, 6),
+        decoration: _creamPillDecoration,
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 34,
+              height: 34,
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                gradient: const LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: [Color(0xFFFFEB8A), Color(0xFFF5B000)],
+                ),
+                border: Border.all(color: const Color(0xFFD98E00), width: 2),
+                boxShadow: const [
+                  BoxShadow(
+                    color: Colors.black12,
+                    blurRadius: 3,
+                    offset: Offset(0, 2),
+                  ),
+                ],
+              ),
+              child: const Text(
+                '\$',
+                style: TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w900,
+                  color: Color(0xFFC77700),
+                ),
               ),
             ),
-          ),
-          const Positioned(left: 0, top: 3, child: _CoinStackIcon()),
-        ],
+            const SizedBox(width: 8),
+            ValueListenableBuilder<int?>(
+              valueListenable: CoinBalance.value,
+              builder: (_, coins, _) => Text(
+              coins == null ? '-' : '$coins',
+              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w900, color: Color(0xFF7A4B1E)),
+            )),
+          ],
+        ),
       ),
     );
   }
 
-  // ---------- ป้ายเหลืองเย็บขอบ "ผจญภัย 50 ด่าน" ----------
   Widget _buildCartoonBanner() {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 26),
-      child: Stack(
-        clipBehavior: Clip.none,
-        alignment: Alignment.center,
-        children: [
-          Container(
-            width: double.infinity,
-            decoration: BoxDecoration(
-              gradient: const LinearGradient(
-                begin: Alignment.topCenter,
-                end: Alignment.bottomCenter,
-                colors: [Color(0xFFFFF6BE), Color(0xFFFFE98C)],
-              ),
-              borderRadius: BorderRadius.circular(28),
-              border: Border.all(color: const Color(0xFFFFFBE3), width: 3),
-              boxShadow: [
-                const BoxShadow(color: Color(0xFFDDB24F), offset: Offset(0, 4)),
-                BoxShadow(color: Colors.black.withOpacity(0.12), blurRadius: 10, offset: const Offset(0, 8)),
-              ],
-            ),
-            child: Stack(
-              alignment: Alignment.center,
-              children: [
-                const Positioned.fill(
-                  child: CustomPaint(
-                    painter: _DashedRRectPainter(
-                      color: Color(0xFFE2BC5A),
-                      radius: 22,
-                      inset: 6,
-                      strokeWidth: 1.6,
-                      dash: 6,
-                      gap: 4,
-                    ),
-                  ),
-                ),
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 12),
-                  child: FittedBox(
-                    fit: BoxFit.scaleDown,
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        const Text('🍭', style: TextStyle(fontSize: 26)),
-                        const SizedBox(width: 8),
-                        Text(
-                          'ผจญภัย ${LevelConfig.maxLevel} ด่าน',
-                          style: const TextStyle(
-                            fontSize: 26,
-                            fontWeight: FontWeight.w900,
-                            color: Color(0xFFB0592B),
-                            shadows: [Shadow(offset: Offset(0, 1.5), blurRadius: 0, color: Color(0xFFFFFBE3))],
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        const Text('🍭', style: TextStyle(fontSize: 26)),
-                      ],
-                    ),
-                  ),
-                ),
-              ],
-            ),
+      child: Container(
+        width: double.infinity,
+        decoration: BoxDecoration(
+          gradient: const LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: [Color(0xFFFFF6BE), Color(0xFFFFE98C)],
           ),
-          const Positioned(left: -22, top: -14, child: Text('✨', style: TextStyle(fontSize: 22))),
-          const Positioned(left: -2, top: -22, child: Text('🐥', style: TextStyle(fontSize: 36))),
-          const Positioned(right: -6, top: -22, child: Text('🐰', style: TextStyle(fontSize: 36))),
-        ],
+          borderRadius: BorderRadius.circular(28),
+          border: Border.all(color: const Color(0xFFFFFBE3), width: 3),
+          boxShadow: [
+            const BoxShadow(color: Color(0xFFDDB24F), offset: Offset(0, 4)),
+            BoxShadow(color: Colors.black.withValues(alpha: 0.12), blurRadius: 10, offset: const Offset(0, 8)),
+          ],
+        ),
+        child: Stack(
+          alignment: Alignment.center,
+          children: [
+            const Positioned.fill(
+              child: CustomPaint(
+                painter: _DashedRRectPainter(
+                  color: Color(0xFFE2BC5A),
+                  radius: 22,
+                  inset: 6,
+                  strokeWidth: 1.6,
+                  dash: 6,
+                  gap: 4,
+                ),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 12),
+              child: FittedBox(
+                fit: BoxFit.scaleDown,
+                child: Text(
+                  'ผจญภัย ${LevelConfig.maxLevel} ด่าน',
+                  style: const TextStyle(
+                    fontSize: 26,
+                    fontWeight: FontWeight.w900,
+                    color: Color(0xFFB0592B),
+                    shadows: [Shadow(offset: Offset(0, 1.5), blurRadius: 0, color: Color(0xFFFFFBE3))],
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
 
-  // ---------- ป้ายไม้แขวน "โลกที่ N: ..." ----------
   Widget _buildWorldSign() {
     final w = LevelConfig.worldFor(_selectedLevel);
     final no = LevelConfig.worldIndexFor(_selectedLevel) + 1;
@@ -693,7 +616,7 @@ class _LevelSelectScreenState extends State<LevelSelectScreen> {
                 borderRadius: BorderRadius.circular(10),
                 border: Border.all(color: const Color(0xFF7B4A22), width: 2.5),
                 boxShadow: [
-                  BoxShadow(color: const Color(0xFF5E3512).withOpacity(0.55), offset: const Offset(0, 4)),
+                  BoxShadow(color: const Color(0xFF5E3512).withValues(alpha: 0.55), offset: const Offset(0, 4)),
                 ],
               ),
               child: Row(
@@ -704,7 +627,7 @@ class _LevelSelectScreenState extends State<LevelSelectScreen> {
                   const SizedBox(width: 8),
                   Flexible(
                     child: Text(
-                      'โลกที่ $no: ${w.name}',
+                      'โลกที่ $no : ${w.name}',
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(
@@ -724,15 +647,14 @@ class _LevelSelectScreenState extends State<LevelSelectScreen> {
     );
   }
 
-  // ---------- กรอบกระจกใสใส่ช่องด่าน ----------
   Widget _buildLevelPanel(GameProgress p) {
     return Container(
       decoration: BoxDecoration(
-        color: Colors.white.withOpacity(0.38),
+        color: Colors.white.withValues(alpha: 0.38),
         borderRadius: BorderRadius.circular(36),
-        border: Border.all(color: Colors.white.withOpacity(0.8), width: 3),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.8), width: 3),
         boxShadow: [
-          BoxShadow(color: const Color(0xFF2E7D32).withOpacity(0.18), blurRadius: 18, offset: const Offset(0, 8)),
+          BoxShadow(color: const Color(0xFF2E7D32).withValues(alpha: 0.18), blurRadius: 18, offset: const Offset(0, 8)),
         ],
       ),
       child: ClipRRect(
@@ -757,7 +679,6 @@ class _LevelSelectScreenState extends State<LevelSelectScreen> {
     final unlocked = level <= p.unlockedLevel;
     final selected = level == _selectedLevel;
     final earned = p.starsOf(level);
-    final mascot = LevelConfig.levelMascots[(level - 1) % LevelConfig.levelMascots.length];
 
     List<Color> gradientColors;
     Color borderColor;
@@ -798,14 +719,13 @@ class _LevelSelectScreenState extends State<LevelSelectScreen> {
           border: Border.all(color: borderColor, width: 2.5),
           boxShadow: [
             BoxShadow(color: shadowColor, offset: const Offset(0, 5)),
-            if (glow) BoxShadow(color: const Color(0xFFFFE066).withOpacity(0.85), blurRadius: 14, spreadRadius: 1),
+            if (glow) BoxShadow(color: const Color(0xFFFFE066).withValues(alpha: 0.85), blurRadius: 14, spreadRadius: 1),
           ],
         ),
         child: Stack(
           clipBehavior: Clip.none,
           alignment: Alignment.center,
           children: [
-            // ไฮไลท์เงานูนด้านบน
             Positioned(
               top: 3,
               left: 8,
@@ -813,12 +733,29 @@ class _LevelSelectScreenState extends State<LevelSelectScreen> {
               height: 9,
               child: Container(
                 decoration: BoxDecoration(
-                  color: Colors.white.withOpacity(0.4),
+                  color: Colors.white.withValues(alpha: 0.4),
                   borderRadius: BorderRadius.circular(10),
                 ),
               ),
             ),
 
+            if (unlocked && _unfinished.contains(level))
+              Positioned(
+                top: -8,
+                right: -6,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFE5334B),
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: Colors.white, width: 1.5),
+                  ),
+                  child: const Text(
+                    '▶ ต่อ',
+                    style: TextStyle(fontSize: 10, fontWeight: FontWeight.w900, color: Colors.white),
+                  ),
+                ),
+              ),
             if (unlocked)
               Positioned.fill(
                 child: Padding(
@@ -828,11 +765,10 @@ class _LevelSelectScreenState extends State<LevelSelectScreen> {
                     child: Column(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        Text(mascot, style: const TextStyle(fontSize: 24)),
                         Text(
                           '$level',
                           style: TextStyle(
-                            fontSize: 22,
+                            fontSize: 26,
                             height: 1.1,
                             fontWeight: FontWeight.w900,
                             color: numberColor,
@@ -875,7 +811,6 @@ class _LevelSelectScreenState extends State<LevelSelectScreen> {
                 ),
               ),
 
-            // เครื่องหมายถูกสีทองที่มุมขวาบน (ด่านที่ผ่านแล้ว)
             if (unlocked && earned > 0)
               const Positioned(
                 top: -10,
@@ -901,22 +836,6 @@ class _LevelSelectScreenState extends State<LevelSelectScreen> {
   Widget _buildPlayButtonSection() {
     return Column(
       children: [
-        // แถวสัตว์น้อยเชียร์บนทุ่งหญ้า
-        Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: const [
-            Text('🐶', style: TextStyle(fontSize: 30)),
-            SizedBox(width: 10),
-            Text('🌸', style: TextStyle(fontSize: 26)),
-            SizedBox(width: 10),
-            Text('🐱', style: TextStyle(fontSize: 30)),
-            SizedBox(width: 10),
-            Text('🌻', style: TextStyle(fontSize: 26)),
-            SizedBox(width: 10),
-            Text('🐻', style: TextStyle(fontSize: 30)),
-          ],
-        ),
-        const SizedBox(height: 6),
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 18),
           child: BouncyTap(
@@ -934,26 +853,19 @@ class _LevelSelectScreenState extends State<LevelSelectScreen> {
                 border: Border.all(color: const Color(0xFFDDF7CC), width: 3.5),
                 boxShadow: [
                   const BoxShadow(color: Color(0xFF2F7D32), offset: Offset(0, 6)),
-                  BoxShadow(color: Colors.black.withOpacity(0.18), blurRadius: 14, offset: const Offset(0, 10)),
+                  BoxShadow(color: Colors.black.withValues(alpha: 0.18), blurRadius: 14, offset: const Offset(0, 10)),
                 ],
               ),
               child: FittedBox(
                 fit: BoxFit.scaleDown,
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const Text('🚀', style: TextStyle(fontSize: 26)),
-                    const SizedBox(width: 8),
-                    Text(
-                      'เริ่มเล่น ด่านที่ $_selectedLevel',
-                      style: const TextStyle(
-                        fontSize: 24,
-                        fontWeight: FontWeight.w900,
-                        color: Colors.white,
-                        shadows: [Shadow(offset: Offset(0, 2), blurRadius: 3, color: Color(0x66000000))],
-                      ),
-                    ),
-                  ],
+                child: Text(
+                  'เริ่มเล่น ด่านที่ $_selectedLevel',
+                  style: const TextStyle(
+                    fontSize: 24,
+                    fontWeight: FontWeight.w900,
+                    color: Colors.white,
+                    shadows: [Shadow(offset: Offset(0, 2), blurRadius: 3, color: Color(0x66000000))],
+                  ),
                 ),
               ),
             ),
@@ -965,49 +877,7 @@ class _LevelSelectScreenState extends State<LevelSelectScreen> {
 }
 
 // ---------------------------------------------------------------
-// ไอคอนเหรียญซ้อนกัน (ใช้ในหน้าเลือกด่าน)
-// ---------------------------------------------------------------
-class _CoinStackIcon extends StatelessWidget {
-  const _CoinStackIcon();
-
-  Widget _coin(double d) => Container(
-        width: d,
-        height: d,
-        alignment: Alignment.center,
-        decoration: BoxDecoration(
-          shape: BoxShape.circle,
-          gradient: const LinearGradient(
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-            colors: [Color(0xFFFFE57A), Color(0xFFFFB300)],
-          ),
-          border: Border.all(color: const Color(0xFFD98E00), width: 2),
-        ),
-        child: Text(
-          '\$',
-          style: TextStyle(fontSize: d * 0.55, fontWeight: FontWeight.w900, color: const Color(0xFFC77700)),
-        ),
-      );
-
-  @override
-  Widget build(BuildContext context) {
-    return SizedBox(
-      width: 54,
-      height: 44,
-      child: Stack(
-        clipBehavior: Clip.none,
-        children: [
-          Positioned(left: 0, bottom: 2, child: _coin(22)),
-          Positioned(left: 7, bottom: 12, child: _coin(22)),
-          Positioned(right: 0, top: 0, child: _coin(34)),
-        ],
-      ),
-    );
-  }
-}
-
-// ---------------------------------------------------------------
-// พื้นหลังท้องฟ้า + ทุ่งหญ้า + ดอกไม้ (หน้าเลือกด่าน)
+// พื้นหลังท้องฟ้า + ทุ่งหญ้า
 // ---------------------------------------------------------------
 class _MeadowBackground extends StatelessWidget {
   const _MeadowBackground();
@@ -1029,7 +899,6 @@ class _MeadowPainter extends CustomPainter {
     final h = size.height;
     final full = Offset.zero & size;
 
-    // ท้องฟ้า
     canvas.drawRect(
       full,
       Paint()
@@ -1041,10 +910,9 @@ class _MeadowPainter extends CustomPainter {
         ).createShader(full),
     );
 
-    // เมฆ
     void cloud(double cx, double cy, double s) {
       final paint = Paint()
-        ..color = Colors.white.withOpacity(0.93)
+        ..color = Colors.white.withValues(alpha: 0.93)
         ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 3);
       canvas.drawCircle(Offset(cx, cy), 16 * s, paint);
       canvas.drawCircle(Offset(cx + 22 * s, cy - 10 * s), 22 * s, paint);
@@ -1058,7 +926,6 @@ class _MeadowPainter extends CustomPainter {
     cloud(-6, h * 0.31, 1.25);
     cloud(w - 92, h * 0.27, 1.35);
 
-    // เนินหลัง
     final back = Path()
       ..moveTo(0, h * 0.58)
       ..quadraticBezierTo(w * 0.12, h * 0.46, w * 0.34, h * 0.56)
@@ -1069,7 +936,6 @@ class _MeadowPainter extends CustomPainter {
       ..close();
     canvas.drawPath(back, Paint()..color = const Color(0xFF6DB65A));
 
-    // เนินกลาง
     final mid = Path()
       ..moveTo(0, h * 0.68)
       ..quadraticBezierTo(w * 0.3, h * 0.6, w * 0.6, h * 0.68)
@@ -1087,7 +953,6 @@ class _MeadowPainter extends CustomPainter {
         ).createShader(Rect.fromLTWH(0, h * 0.6, w, h * 0.4)),
     );
 
-    // ทุ่งหญ้าด้านหน้า
     final front = Path()
       ..moveTo(0, h * 0.78)
       ..quadraticBezierTo(w * 0.4, h * 0.72, w * 0.75, h * 0.79)
@@ -1104,32 +969,6 @@ class _MeadowPainter extends CustomPainter {
           colors: [Color(0xFF7ACB4A), Color(0xFF4FA83A)],
         ).createShader(Rect.fromLTWH(0, h * 0.72, w, h * 0.28)),
     );
-
-    // ดอกไม้
-    void flower(double x, double y, double r, Color petal) {
-      final pp = Paint()..color = petal;
-      for (int k = 0; k < 5; k++) {
-        final a = k * 2 * pi / 5;
-        canvas.drawCircle(Offset(x + cos(a) * r, y + sin(a) * r), r * 0.8, pp);
-      }
-      canvas.drawCircle(Offset(x, y), r * 0.7, Paint()..color = const Color(0xFFFFC107));
-    }
-
-    final rnd = Random(11);
-    final petals = <Color>[
-      Colors.white,
-      const Color(0xFFFFB6C8),
-      const Color(0xFFFFD54F),
-      const Color(0xFFFF9F43),
-      const Color(0xFFB9A6FF),
-    ];
-    for (int i = 0; i < 46; i++) {
-      final x = rnd.nextDouble() * w;
-      final t = rnd.nextDouble();
-      final y = h * (0.62 + t * 0.36);
-      final r = 2.0 + t * 4.5;
-      flower(x, y, r, petals[i % petals.length]);
-    }
   }
 
   @override
@@ -1195,14 +1034,17 @@ class AlphabetTrain extends StatelessWidget {
 class AlphabetGameScreen extends StatefulWidget {
   final int initialStage;
 
-  const AlphabetGameScreen({super.key, this.initialStage = 1});
+  /// The level left in the middle, to continue (null = start it fresh).
+  final AlphabetRound? resume;
+
+  const AlphabetGameScreen({super.key, this.initialStage = 1, this.resume});
 
   @override
   State<AlphabetGameScreen> createState() => _AlphabetGameScreenState();
 }
 
-class _AlphabetGameScreenState extends State<AlphabetGameScreen> with TickerProviderStateMixin {
-  final AudioPlayer _audioPlayer = AudioPlayer();
+class _AlphabetGameScreenState extends State<AlphabetGameScreen>
+    with TickerProviderStateMixin, WidgetsBindingObserver {
   final FlutterTts _tts = FlutterTts();
 
   late final AnimationController _shakeController;
@@ -1257,9 +1099,13 @@ class _AlphabetGameScreenState extends State<AlphabetGameScreen> with TickerProv
   String _correctAnswer = '';
   List<String> _options = [];
 
-  int _score = 0;
-  int _levelStartScore = 0;
-  int _combo = 0;
+  late final Future<void> _ttsReady; // voice settings applied before speaking
+  // Real coins of this level (2 per letter per day, from the server).
+  final List<Future<GuessCoinResult>> _levelCoins = [];
+  bool _pausedByApp = false; // time stopped while the app was in the background
+  List<int> _allMissing = []; // every hidden position of this level
+  int _coinsBefore = 0; // coins of this level earned before "เล่นต่อ"
+  int _coinsNow = 0; // coins earned since the level was opened
   late int _stage;
   String? _wrongOption;
   Rect? _burstOriginRect;
@@ -1269,6 +1115,7 @@ class _AlphabetGameScreenState extends State<AlphabetGameScreen> with TickerProv
   int _remainingSeconds = 60;
   bool _levelEnded = false;
   bool _busy = false;
+  int _earnedStars = 1;
 
   final List<List<Color>> _cellGradients = [
     [const Color(0xFF7BD958), const Color(0xFF2E9E2E)],
@@ -1283,7 +1130,7 @@ class _AlphabetGameScreenState extends State<AlphabetGameScreen> with TickerProv
   void initState() {
     super.initState();
     _stage = widget.initialStage;
-    _initTts();
+    _ttsReady = _initTts();
 
     _shakeController = AnimationController(vsync: this, duration: const Duration(milliseconds: 400));
     _shakeAnimation = Tween<double>(begin: 0.0, end: 12.0)
@@ -1295,7 +1142,24 @@ class _AlphabetGameScreenState extends State<AlphabetGameScreen> with TickerProv
     _pulseController = AnimationController(vsync: this, duration: const Duration(milliseconds: 1000))..repeat(reverse: true);
     _bgController = AnimationController(vsync: this, duration: const Duration(seconds: 16))..repeat();
 
-    _startLevel();
+    _startLevel(resume: widget.resume);
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  // The time doesn't run while the app is in the background (phone call,
+  // another app); it goes on when the child comes back.
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      if (_pausedByApp && mounted && !_levelEnded) {
+        _pausedByApp = false;
+        _startTimer();
+      }
+    } else if (_timer != null) {
+      _stopTimer();
+      _pausedByApp = true;
+      _saveResume(); // the app may be closed while in the background
+    }
   }
 
   Future<void> _initTts() async {
@@ -1307,13 +1171,14 @@ class _AlphabetGameScreenState extends State<AlphabetGameScreen> with TickerProv
 
   @override
   void dispose() {
+    _saveResume(); // left in the middle (back button): continue later
+    WidgetsBinding.instance.removeObserver(this);
     _timer?.cancel();
     _shakeController.dispose();
     _burstController.dispose();
     _blinkController.dispose();
     _pulseController.dispose();
     _bgController.dispose();
-    _audioPlayer.dispose();
     _tts.stop();
     super.dispose();
   }
@@ -1342,34 +1207,43 @@ class _AlphabetGameScreenState extends State<AlphabetGameScreen> with TickerProv
   double get _boardHeight =>
       _topPad + _bottomPad + _rowLengths.length * _cellH + (_rowLengths.length - 1) * _rowGap;
 
-  void _startLevel({bool retry = false}) {
+  void _startLevel({AlphabetRound? resume}) {
     final random = Random();
 
     _boardLetters = List.from(_alphabet);
 
-    final missingCount = LevelConfig.missingCountForLevel(_stage);
-    final missingSet = <int>{};
-    while (missingSet.length < missingCount) {
-      missingSet.add(random.nextInt(_alphabet.length));
+    if (resume != null) {
+      // Same hidden letters; the ones filled before stay filled.
+      _allMissing = List.of(resume.missing);
+      _missingIndices = _allMissing.sublist(resume.done);
+      _coinsBefore = resume.coins;
+    } else {
+      final missingCount = LevelConfig.missingCountForLevel(_stage);
+      final missingSet = <int>{};
+      while (missingSet.length < missingCount) {
+        missingSet.add(random.nextInt(_alphabet.length));
+      }
+      _allMissing = missingSet.toList()..sort();
+      _missingIndices = List.of(_allMissing);
+      _coinsBefore = 0;
+      AlphabetResume.clear(_stage); // a new game of this level
     }
-    _missingIndices = missingSet.toList()..sort();
     for (final idx in _missingIndices) {
       _boardLetters[idx] = '?';
     }
 
-    if (retry) {
-      _score = _levelStartScore;
-    } else {
-      _levelStartScore = _score;
-    }
-    _combo = 0;
+    _coinsNow = 0;
+    _levelCoins.clear();
+    _pausedByApp = false;
     _wrongOption = null;
     _burstOriginRect = null;
     _levelEnded = false;
     _busy = false;
 
     _totalSeconds = LevelConfig.timeForLevel(_stage);
-    _remainingSeconds = _totalSeconds;
+    _remainingSeconds = resume == null
+        ? _totalSeconds
+        : resume.remaining.clamp(1, _totalSeconds).toInt();
 
     _prepareNextQuestion();
     _startTimer();
@@ -1409,19 +1283,29 @@ class _AlphabetGameScreenState extends State<AlphabetGameScreen> with TickerProv
     _timer = null;
   }
 
+  /// Where the child is in this level, so it can be continued later.
+  void _saveResume() {
+    final done = _allMissing.length - _missingIndices.length;
+    if (_levelEnded || done < 1 || _missingIndices.isEmpty || _remainingSeconds < 1) return;
+    AlphabetResume.save(
+      _stage,
+      AlphabetRound(
+        missing: List.of(_allMissing),
+        done: done,
+        remaining: _remainingSeconds,
+        coins: min(_coinsBefore + _coinsNow, done * kGameCoinsPerWord),
+      ),
+    );
+  }
+
   void _onTimeUp() {
     _levelEnded = true;
-    _playSound('wrong.mp3');
+    AlphabetResume.clear(_stage);
     ScaffoldMessenger.of(context).clearSnackBars();
     _showGameOverDialog();
   }
 
-  void _playSound(String assetName) async {
-    try {
-      await _audioPlayer.stop();
-      await _audioPlayer.play(AssetSource('sounds/$assetName'));
-    } catch (_) {}
-  }
+  static const int _wrongPenaltySeconds = 3;
 
   void _handleOptionSelect(String selectedLetter) async {
     if (_levelEnded || _busy) return;
@@ -1429,31 +1313,36 @@ class _AlphabetGameScreenState extends State<AlphabetGameScreen> with TickerProv
     if (selectedLetter == _correctAnswer) {
       _busy = true;
       _stopTimer();
+      Sfx.correct();
 
-      _combo += 1;
-      final earnedScore = 10 + (_combo > 1 ? (_combo - 1) * 5 : 0);
+      final coinFuture = AlphabetCoins.submit(selectedLetter);
+      _levelCoins.add(coinFuture);
+      coinFuture.then((r) => _coinsNow += r.coins);
       final cellRects = _cellRects();
 
       setState(() {
-        _score += earnedScore;
         _boardLetters[_currentMissingIndex] = selectedLetter;
         _burstOriginRect = cellRects[_currentMissingIndex];
         _missingIndices.removeAt(0);
       });
 
+      _saveResume(); // kept even if the app is closed during the reward
       _burstController.forward(from: 0.0);
-      _playSound('correct.mp3');
 
       final data = _alphabetData[selectedLetter];
       final word = data?['word'] ?? selectedLetter;
-      final emoji = data?['emoji'] ?? '✨';
 
-      _tts.speak('$selectedLetter. $selectedLetter is for $word');
+      _ttsReady.then((_) => _tts.speak('$selectedLetter. $selectedLetter is for $word'));
 
       await showDialog(
         context: context,
         barrierDismissible: false,
-        builder: (context) => _RewardDialog(letter: selectedLetter, word: word, emoji: emoji),
+        builder: (context) => _RewardDialog(
+          letter: selectedLetter,
+          word: word,
+          emoji: data?['emoji'] ?? '',
+          coin: coinFuture,
+        ),
       );
 
       if (!mounted) return;
@@ -1468,12 +1357,18 @@ class _AlphabetGameScreenState extends State<AlphabetGameScreen> with TickerProv
         _startTimer();
       }
     } else {
+      // A wrong guess costs 3 seconds, so tapping every letter doesn't pay.
+      Sfx.wrong();
       setState(() {
-        _combo = 0;
         _wrongOption = selectedLetter;
+        _remainingSeconds = max(0, _remainingSeconds - _wrongPenaltySeconds);
       });
+      if (_remainingSeconds <= 0) {
+        _stopTimer();
+        _onTimeUp();
+        return;
+      }
 
-      _playSound('wrong.mp3');
       _shakeController.forward(from: 0.0);
 
       ScaffoldMessenger.of(context).clearSnackBars();
@@ -1485,7 +1380,7 @@ class _AlphabetGameScreenState extends State<AlphabetGameScreen> with TickerProv
           content: const Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Text('❌ ลองใหม่อีกทีนะ! 🐍', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.white)),
+              Text('ลองใหม่อีกทีนะ (-$_wrongPenaltySeconds วินาที)', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.white)),
             ],
           ),
           backgroundColor: const Color(0xFFEF4444),
@@ -1498,11 +1393,24 @@ class _AlphabetGameScreenState extends State<AlphabetGameScreen> with TickerProv
   Future<void> _completeLevel() async {
     _levelEnded = true;
     _stopTimer();
+    AlphabetResume.clear(_stage);
 
-    await GameProgress.saveLevelResult(level: _stage, stars: 1);
+    // ดาวตามเวลาที่เหลือ: เหลือ >= 50% = 3 ดาว, >= 25% = 2 ดาว, น้อยกว่านั้น 1 ดาว
+    final double timeRatio = _totalSeconds > 0 ? _remainingSeconds / _totalSeconds : 0;
+    _earnedStars = timeRatio >= 0.5 ? 3 : (timeRatio >= 0.25 ? 2 : 1);
+    await GameProgress.saveLevelResult(level: _stage, stars: _earnedStars);
     if (!mounted) return;
 
+    Sfx.complete();
     _showLevelCompleteDialog();
+  }
+
+  String _coinSummary(List<GuessCoinResult>? list) {
+    if (list == null) return 'กำลังนับเหรียญ...';
+    final coins = _coinsBefore + list.fold<int>(0, (sum, r) => sum + r.coins);
+    final pending = list.where((r) => r.pending).length;
+    if (pending > 0) return 'ได้ $coins เหรียญ (+${pending * kGameCoinsPerWord} รอต่อเน็ต)';
+    return coins > 0 ? 'ได้ $coins เหรียญ' : 'ตัวอักษรด่านนี้ได้เหรียญไปแล้ววันนี้';
   }
 
   void _showLevelCompleteDialog() {
@@ -1514,65 +1422,183 @@ class _AlphabetGameScreenState extends State<AlphabetGameScreen> with TickerProv
       builder: (ctx) => PopScope(
         canPop: false,
         child: Dialog(
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(28)),
-          child: Padding(
-            padding: const EdgeInsets.all(24.0),
+          backgroundColor: Colors.transparent,
+          elevation: 0,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 24.0, vertical: 28.0),
+            decoration: BoxDecoration(
+              gradient: const LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: [Color(0xFFFFFBEB), Color(0xFFFEF3C7)],
+              ),
+              borderRadius: BorderRadius.circular(32),
+              border: Border.all(color: const Color(0xFFFDE68A), width: 3.5),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.25),
+                  blurRadius: 20,
+                  offset: const Offset(0, 10),
+                ),
+              ],
+            ),
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
+                // แสดงดาวเฉลิมฉลอง 3 ดวง
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: List.generate(3, (index) {
+                    final isCenter = index == 1;
+                    return Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 4.0),
+                      child: Transform.translate(
+                        offset: Offset(0, isCenter ? -6 : 0),
+                        child: Icon(
+                          Icons.star_rounded,
+                          size: isCenter ? 52 : 44,
+                          color: index < _earnedStars ? const Color(0xFFFFB800) : const Color(0xFFE2E8F0),
+                          shadows: const [
+                            Shadow(offset: Offset(0, 2), blurRadius: 4, color: Color(0x33000000)),
+                          ],
+                        ),
+                      ),
+                    );
+                  }),
+                ),
+                const SizedBox(height: 8),
+
+                // ข้อความหัวข้อ
                 Text(
-                  '👑 ผ่านด่าน $_stage แล้ว! 👑',
-                  style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w900, color: Color(0xFFCA8A04)),
+                  'ผ่านด่าน $_stage แล้วนะ !',
+                  style: const TextStyle(
+                    fontSize: 26,
+                    fontWeight: FontWeight.w900,
+                    color: Color(0xFFD97706),
+                    shadows: [
+                      Shadow(offset: Offset(0, 1.5), blurRadius: 2, color: Colors.white),
+                    ],
+                  ),
                 ),
                 const SizedBox(height: 12),
-                const SizedBox(height: 8),
-                Text('คะแนนรวม $_score', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+
+                // ป้ายแสดงคะแนน
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.85),
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(color: const Color(0xFFFCD34D), width: 1.5),
+                  ),
+                  child: FutureBuilder<List<GuessCoinResult>>(
+                    future: Future.wait(_levelCoins),
+                    builder: (_, snap) => Text(
+                    _coinSummary(snap.data),
+                    style: const TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.w800,
+                      color: Color(0xFF78350F),
+                    ),
+                  )),
+                ),
+
                 if (_stage % LevelConfig.levelsPerWorld == 0 && hasNext) ...[
-                  const SizedBox(height: 8),
+                  const SizedBox(height: 12),
                   Text(
-                    '🎊 ผ่านโลก "${LevelConfig.worldFor(_stage).name}" แล้ว! ด่านต่อไปเปลี่ยนโลกใหม่นะ',
+                    'ผ่านโลก "${LevelConfig.worldFor(_stage).name}" แล้ว !\nด่านต่อไปจะเปลี่ยนโลกใหม่นะ',
                     textAlign: TextAlign.center,
-                    style: const TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF7C3AED)),
+                    style: const TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w700,
+                      color: Color(0xFF7C3AED),
+                    ),
                   ),
                 ],
+
                 if (!hasNext) ...[
-                  const SizedBox(height: 8),
-                  const Text('🎉 คุณเก่งมาก! เล่นชนะครบทุกด่านแล้ว 🎉', style: TextStyle(fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 12),
+                  const Text(
+                    'เก่งมาก ! คุณเล่นชนะครบทุกด่านแล้ว',
+                    style: TextStyle(fontSize: 15, fontWeight: FontWeight.w800, color: Color(0xFF059669)),
+                  ),
                 ],
-                const SizedBox(height: 20),
+
+                const SizedBox(height: 26),
+
+                // แถบปุ่มกด
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                   children: [
-                    OutlinedButton.icon(
-                      style: OutlinedButton.styleFrom(
-                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                      ),
-                      onPressed: () {
-                        Navigator.pop(ctx);
-                        Navigator.pop(context, _stage);
-                      },
-                      icon: const Icon(Icons.grid_view_rounded, color: Colors.redAccent),
-                      label: const Text('เลือกด่าน', style: TextStyle(color: Colors.redAccent, fontWeight: FontWeight.bold)),
-                    ),
-                    if (hasNext)
-                      ElevatedButton.icon(
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: const Color(0xFF22C55E),
-                          foregroundColor: Colors.white,
-                          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                        ),
-                        onPressed: () {
+                    // ปุ่มเลือกด่าน
+                    Expanded(
+                      child: BouncyTap(
+                        onTap: () {
                           Navigator.pop(ctx);
-                          setState(() {
-                            _stage += 1;
-                            _startLevel();
-                          });
+                          Navigator.pop(context, _stage);
                         },
-                        icon: const Icon(Icons.arrow_forward_rounded),
-                        label: const Text('ด่านถัดไป', style: TextStyle(fontWeight: FontWeight.w900)),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(vertical: 13),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFFFF1F2),
+                            borderRadius: BorderRadius.circular(20),
+                            border: Border.all(color: const Color(0xFFFECDD3), width: 2),
+                            boxShadow: const [
+                              BoxShadow(color: Color(0xFFFDA4AF), offset: Offset(0, 3)),
+                            ],
+                          ),
+                          child: const Text(
+                            'เลือกด่าน',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              fontSize: 17,
+                              fontWeight: FontWeight.w800,
+                              color: Color(0xFFE11D48),
+                            ),
+                          ),
+                        ),
                       ),
+                    ),
+
+                    if (hasNext) ...[
+                      const SizedBox(width: 12),
+                      // ปุ่มด่านถัดไป
+                      Expanded(
+                        child: BouncyTap(
+                          onTap: () {
+                            Navigator.pop(ctx);
+                            setState(() {
+                              _stage += 1;
+                              _startLevel();
+                            });
+                          },
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(vertical: 13),
+                            decoration: BoxDecoration(
+                              gradient: const LinearGradient(
+                                begin: Alignment.topCenter,
+                                end: Alignment.bottomCenter,
+                                colors: [Color(0xFF4ADE80), Color(0xFF16A34A)],
+                              ),
+                              borderRadius: BorderRadius.circular(20),
+                              border: Border.all(color: const Color(0xFFBBF7D0), width: 2),
+                              boxShadow: const [
+                                BoxShadow(color: Color(0xFF15803D), offset: Offset(0, 4)),
+                              ],
+                            ),
+                            child: const Text(
+                              'ด่านถัดไป',
+                              textAlign: TextAlign.center,
+                              style: TextStyle(
+                                fontSize: 17,
+                                fontWeight: FontWeight.w900,
+                                color: Colors.white,
+                                shadows: [Shadow(offset: Offset(0, 1), blurRadius: 2, color: Colors.black26)],
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
                   ],
                 ),
               ],
@@ -1583,6 +1609,7 @@ class _AlphabetGameScreenState extends State<AlphabetGameScreen> with TickerProv
     );
   }
 
+  // UI หน้า GAME OVER
   void _showGameOverDialog() {
     showDialog(
       context: context,
@@ -1590,53 +1617,117 @@ class _AlphabetGameScreenState extends State<AlphabetGameScreen> with TickerProv
       builder: (ctx) => PopScope(
         canPop: false,
         child: Dialog(
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(28)),
-          child: Padding(
-            padding: const EdgeInsets.all(24.0),
+          backgroundColor: Colors.transparent,
+          elevation: 0,
+          child: Container(
+            padding: const EdgeInsets.all(28.0),
+            decoration: BoxDecoration(
+              gradient: const LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: [Color(0xFFFFF5F5), Color(0xFFFFEAEA)],
+              ),
+              borderRadius: BorderRadius.circular(32),
+              border: Border.all(color: const Color(0xFFFFA8A8), width: 3),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.25),
+                  blurRadius: 20,
+                  offset: const Offset(0, 10),
+                ),
+              ],
+            ),
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                const Text('⏰', style: TextStyle(fontSize: 56)),
-                const SizedBox(height: 4),
                 const Text(
                   'GAME OVER',
-                  style: TextStyle(fontSize: 28, fontWeight: FontWeight.w900, color: Color(0xFFDC2626)),
+                  style: TextStyle(
+                    fontSize: 32,
+                    fontWeight: FontWeight.w900,
+                    color: Color(0xFFE53E3E),
+                    letterSpacing: 1.2,
+                    shadows: [
+                      Shadow(offset: Offset(0, 2), blurRadius: 4, color: Color(0x33000000)),
+                    ],
+                  ),
                 ),
-                const SizedBox(height: 8),
+                const SizedBox(height: 14),
                 Text(
-                  'หมดเวลาในด่าน $_stage แล้ว ลองอีกครั้งนะ!',
+                  'หมดเวลาในด่าน $_stage แล้ว ลองอีกครั้งนะ !',
                   textAlign: TextAlign.center,
-                  style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                  style: const TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w700,
+                    color: Color(0xFF4A5568),
+                    height: 1.4,
+                  ),
                 ),
-                const SizedBox(height: 20),
+                const SizedBox(height: 28),
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                   children: [
-                    OutlinedButton.icon(
-                      style: OutlinedButton.styleFrom(
-                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                    Expanded(
+                      child: BouncyTap(
+                        onTap: () {
+                          Navigator.pop(ctx);
+                          Navigator.pop(context, _stage);
+                        },
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(vertical: 14),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFEDF2F7),
+                            borderRadius: BorderRadius.circular(20),
+                            border: Border.all(color: const Color(0xFFCBD5E0), width: 2),
+                            boxShadow: const [
+                              BoxShadow(color: Color(0xFFA0AEC0), offset: Offset(0, 3)),
+                            ],
+                          ),
+                          child: const Text(
+                            'ออก',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.w800,
+                              color: Color(0xFF4A5568),
+                            ),
+                          ),
+                        ),
                       ),
-                      onPressed: () {
-                        Navigator.pop(ctx);
-                        Navigator.pop(context, _stage);
-                      },
-                      icon: const Icon(Icons.exit_to_app_rounded, color: Colors.redAccent),
-                      label: const Text('ออก', style: TextStyle(color: Colors.redAccent, fontWeight: FontWeight.bold)),
                     ),
-                    ElevatedButton.icon(
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: const Color(0xFF22C55E),
-                        foregroundColor: Colors.white,
-                        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                    const SizedBox(width: 14),
+                    Expanded(
+                      child: BouncyTap(
+                        onTap: () {
+                          Navigator.pop(ctx);
+                          setState(() => _startLevel());
+                        },
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(vertical: 14),
+                          decoration: BoxDecoration(
+                            gradient: const LinearGradient(
+                              begin: Alignment.topCenter,
+                              end: Alignment.bottomCenter,
+                              colors: [Color(0xFF48BB78), Color(0xFF2F855A)],
+                            ),
+                            borderRadius: BorderRadius.circular(20),
+                            border: Border.all(color: const Color(0xFF9AE6B4), width: 2),
+                            boxShadow: const [
+                              BoxShadow(color: Color(0xFF22543D), offset: Offset(0, 4)),
+                            ],
+                          ),
+                          child: const Text(
+                            'ลองใหม่',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.w900,
+                              color: Colors.white,
+                              shadows: [Shadow(offset: Offset(0, 1), blurRadius: 2, color: Colors.black26)],
+                            ),
+                          ),
+                        ),
                       ),
-                      onPressed: () {
-                        Navigator.pop(ctx);
-                        setState(() => _startLevel(retry: true));
-                      },
-                      icon: const Icon(Icons.refresh_rounded),
-                      label: const Text('ลองใหม่', style: TextStyle(fontWeight: FontWeight.w900)),
                     ),
                   ],
                 ),
@@ -1648,7 +1739,7 @@ class _AlphabetGameScreenState extends State<AlphabetGameScreen> with TickerProv
     );
   }
 
-  String get _stageDifficultyText => 'ด่าน $_stage/${LevelConfig.maxLevel}';
+  String get _stageDifficultyText => 'ด่าน $_stage / ${LevelConfig.maxLevel}';
 
   String _formatTime(int seconds) {
     final s = max(0, seconds);
@@ -1657,7 +1748,6 @@ class _AlphabetGameScreenState extends State<AlphabetGameScreen> with TickerProv
 
   WorldTheme get _world => LevelConfig.worldFor(_stage);
 
-  // ---------- สไตล์ป่าไม้ ----------
   static const Color _woodDeep = Color(0xFF5B3A1E);
 
   BoxDecoration _woodDeco({double radius = 10, bool red = false}) => BoxDecoration(
@@ -1735,7 +1825,6 @@ class _AlphabetGameScreenState extends State<AlphabetGameScreen> with TickerProv
     );
   }
 
-  // ---------- ป้ายคำสั่งแบบกระดาษม้วน ----------
   Widget _buildHintBubble() {
     Widget roll() => Container(
           width: 13,
@@ -1762,16 +1851,15 @@ class _AlphabetGameScreenState extends State<AlphabetGameScreen> with TickerProv
               border: Border.all(color: const Color(0xFFC9A66B), width: 2),
               boxShadow: const [BoxShadow(color: Color(0x55000000), offset: Offset(0, 3), blurRadius: 4)],
             ),
-            child: Row(
+            child: const Row(
               mainAxisAlignment: MainAxisAlignment.center,
-              children: const [
-                Text('🐍', style: TextStyle(fontSize: 20)),
+              children: [
                 SizedBox(width: 6),
                 Flexible(
                   child: FittedBox(
                     fit: BoxFit.scaleDown,
                     child: Text(
-                      'ลากตัวอักษรไปเติมช่อง ? ของงูน้อย!',
+                      'ลากตัวอักษรไปเติมช่อง ? ของงูน้อย',
                       style: TextStyle(fontSize: 14.5, fontWeight: FontWeight.w800, color: Color(0xFF6B4A22)),
                     ),
                   ),
@@ -1781,13 +1869,11 @@ class _AlphabetGameScreenState extends State<AlphabetGameScreen> with TickerProv
           ),
           Positioned(left: 0, top: -2, bottom: -2, child: roll()),
           Positioned(right: 0, top: -2, bottom: -2, child: roll()),
-          const Positioned(left: -2, top: -12, child: Text('🍃', style: TextStyle(fontSize: 22))),
         ],
       ),
     );
   }
 
-  // ---------- แถวบน: นาฬิกา + หีบสมบัติ + เหรียญ/ดาว ----------
   Widget _buildCustomTopBar() {
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -1799,6 +1885,7 @@ class _AlphabetGameScreenState extends State<AlphabetGameScreen> with TickerProv
     );
   }
 
+  // แถบจับเวลา ใส่ อิโมจินาฬิกาทราย ⏳
   Widget _buildTimerChip() {
     final low = _remainingSeconds <= 10;
     return SizedBox(
@@ -1843,7 +1930,7 @@ class _AlphabetGameScreenState extends State<AlphabetGameScreen> with TickerProv
                 border: Border.all(color: const Color(0xFF8B5A2B), width: 4),
                 boxShadow: const [BoxShadow(color: Color(0x66000000), offset: Offset(0, 3), blurRadius: 4)],
               ),
-              child: Text(low ? '⏰' : '⏱️', style: const TextStyle(fontSize: 26)),
+              child: const Text('⏳', style: TextStyle(fontSize: 26)),
             ),
           ),
         ],
@@ -1851,66 +1938,77 @@ class _AlphabetGameScreenState extends State<AlphabetGameScreen> with TickerProv
     );
   }
 
-  Widget _hudPill(Widget icon, String text) {
-    return Container(
-      constraints: const BoxConstraints(minWidth: 74),
-      height: 28,
-      padding: const EdgeInsets.fromLTRB(3, 0, 10, 0),
-      decoration: BoxDecoration(
-        gradient: const LinearGradient(
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
-          colors: [Color(0xFF9A6533), Color(0xFF6B4220)],
-        ),
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: const Color(0xFF4A2B12), width: 2),
-        boxShadow: const [BoxShadow(color: Color(0x55000000), offset: Offset(0, 2), blurRadius: 3)],
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          Container(
-            width: 22,
-            height: 22,
-            alignment: Alignment.center,
-            decoration: BoxDecoration(
-              color: const Color(0xFF5B3A1E),
-              shape: BoxShape.circle,
-              border: Border.all(color: const Color(0xFFE0B77A), width: 1.5),
+  // ป้ายเหรียญดอลลาร์ทรงแคปซูล (สไตล์เดียวกับรูปที่ 2)
+  Widget _buildCoinBadge() {
+    return SizedBox(
+      height: 48,
+      child: Container(
+        padding: const EdgeInsets.fromLTRB(8, 6, 20, 6),
+        decoration: BoxDecoration(
+          color: const Color(0xFFFFF4DA).withValues(alpha: 0.95),
+          borderRadius: BorderRadius.circular(24),
+          border: Border.all(color: const Color(0xFFF3DDAE), width: 2),
+          boxShadow: [
+            BoxShadow(
+              color: const Color(0xFFB8860B).withValues(alpha: 0.25),
+              offset: const Offset(0, 3),
+              blurRadius: 4,
             ),
-            child: icon,
-          ),
-          const SizedBox(width: 8),
-          Text(text, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w900, color: Colors.white)),
-        ],
+          ],
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 32,
+              height: 32,
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                gradient: const LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: [Color(0xFFFFEB8A), Color(0xFFF5B000)],
+                ),
+                border: Border.all(color: const Color(0xFFD98E00), width: 2),
+                boxShadow: const [
+                  BoxShadow(
+                    color: Colors.black12,
+                    blurRadius: 3,
+                    offset: Offset(0, 2),
+                  ),
+                ],
+              ),
+              child: const Text(
+                '\$',
+                style: TextStyle(
+                  fontSize: 17,
+                  fontWeight: FontWeight.w900,
+                  color: Color(0xFFC77700),
+                ),
+              ),
+            ),
+            const SizedBox(width: 8),
+            ValueListenableBuilder<int?>(
+              valueListenable: CoinBalance.value,
+              builder: (_, coins, _) => Text(
+              coins == null ? '-' : '$coins',
+              style: const TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.w900,
+                color: Color(0xFF7A4B1E),
+              ),
+            )),
+          ],
+        ),
       ),
     );
   }
 
   Widget _buildRewardCluster() {
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const SizedBox(width: 70, height: 56, child: CustomPaint(painter: _TreasureChestPainter())),
-        const SizedBox(width: 4),
-        Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            _hudPill(const Icon(Icons.star_rounded, color: Color(0xFFFFC107), size: 16), '0'),
-            const SizedBox(height: 5),
-            _hudPill(
-              const Icon(Icons.star_rounded, color: Color(0xFF4DA3FF), size: 17),
-              _combo > 1 ? '🔥x$_combo  $_score' : '$_score',
-            ),
-          ],
-        ),
-      ],
-    );
+    return _buildCoinBadge();
   }
 
-  // ---------- หลอดเวลา (เขียวเงา มีหัวงู) ----------
   Widget _buildTimeBar() {
     final low = _remainingSeconds <= 10;
     final value = (_remainingSeconds / _totalSeconds).clamp(0.0, 1.0).toDouble();
@@ -1933,7 +2031,7 @@ class _AlphabetGameScreenState extends State<AlphabetGameScreen> with TickerProv
                   decoration: BoxDecoration(
                     color: const Color(0x66113311),
                     borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: Colors.white.withOpacity(0.85), width: 2.5),
+                    border: Border.all(color: Colors.white.withValues(alpha: 0.85), width: 2.5),
                     boxShadow: const [BoxShadow(color: Color(0x55000000), blurRadius: 4, offset: Offset(0, 2))],
                   ),
                 ),
@@ -1950,7 +2048,7 @@ class _AlphabetGameScreenState extends State<AlphabetGameScreen> with TickerProv
                     ),
                     borderRadius: BorderRadius.circular(12),
                     border: Border.all(color: Colors.white, width: 2.5),
-                    boxShadow: [BoxShadow(color: fillColors[1].withOpacity(0.7), blurRadius: 8)],
+                    boxShadow: [BoxShadow(color: fillColors[1].withValues(alpha: 0.7), blurRadius: 8)],
                   ),
                   child: Align(
                     alignment: Alignment.topCenter,
@@ -1958,16 +2056,11 @@ class _AlphabetGameScreenState extends State<AlphabetGameScreen> with TickerProv
                       height: 4,
                       margin: const EdgeInsets.fromLTRB(8, 2, 8, 0),
                       decoration: BoxDecoration(
-                        color: Colors.white.withOpacity(0.55),
+                        color: Colors.white.withValues(alpha: 0.55),
                         borderRadius: BorderRadius.circular(4),
                       ),
                     ),
                   ),
-                ),
-                Positioned(
-                  left: (fillW - 12).clamp(0.0, max(0.0, c.maxWidth - 36)).toDouble(),
-                  top: -2,
-                  child: Text(low ? '😱' : '🐍', style: const TextStyle(fontSize: 28)),
                 ),
               ],
             ),
@@ -1977,7 +2070,6 @@ class _AlphabetGameScreenState extends State<AlphabetGameScreen> with TickerProv
     );
   }
 
-  // ---------- ป้ายไม้แขวน: ด่าน + เหลืออีกกี่ช่อง ----------
   Widget _buildProgressBadge() {
     Widget rope() => Container(width: 3, height: 14, color: const Color(0xFF8A6A3C));
     return Stack(
@@ -1993,8 +2085,6 @@ class _AlphabetGameScreenState extends State<AlphabetGameScreen> with TickerProv
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Text('🌳', style: TextStyle(fontSize: 18)),
-              const SizedBox(width: 6),
               Text(
                 _stageDifficultyText,
                 style: const TextStyle(
@@ -2016,8 +2106,6 @@ class _AlphabetGameScreenState extends State<AlphabetGameScreen> with TickerProv
                   shadows: [Shadow(color: Color(0xFF3E2A18), offset: Offset(0, 1.5))],
                 ),
               ),
-              const SizedBox(width: 4),
-              const Text('⭐', style: TextStyle(fontSize: 16)),
             ],
           ),
         ),
@@ -2025,7 +2113,6 @@ class _AlphabetGameScreenState extends State<AlphabetGameScreen> with TickerProv
     );
   }
 
-  // ---------- ลูกบอลตัวอักษร ขอบหิน ----------
   Widget _letterBall(Widget inner, List<Color> colors, double d, {List<BoxShadow>? glow}) {
     return Container(
       width: d,
@@ -2049,7 +2136,7 @@ class _AlphabetGameScreenState extends State<AlphabetGameScreen> with TickerProv
             end: Alignment.bottomCenter,
             colors: colors,
           ),
-          border: Border.all(color: Colors.white.withOpacity(0.5), width: 1.2),
+          border: Border.all(color: Colors.white.withValues(alpha: 0.5), width: 1.2),
         ),
         child: Stack(
           children: [
@@ -2060,7 +2147,7 @@ class _AlphabetGameScreenState extends State<AlphabetGameScreen> with TickerProv
               height: 8,
               child: Container(
                 decoration: BoxDecoration(
-                  color: Colors.white.withOpacity(0.4),
+                  color: Colors.white.withValues(alpha: 0.4),
                   borderRadius: BorderRadius.circular(8),
                 ),
               ),
@@ -2125,7 +2212,7 @@ class _AlphabetGameScreenState extends State<AlphabetGameScreen> with TickerProv
                                 d,
                                 glow: [
                                   BoxShadow(
-                                    color: const Color(0xFFFFD54F).withOpacity(0.9),
+                                    color: const Color(0xFFFFD54F).withValues(alpha: 0.9),
                                     blurRadius: 14,
                                     spreadRadius: 3,
                                   ),
@@ -2180,7 +2267,6 @@ class _AlphabetGameScreenState extends State<AlphabetGameScreen> with TickerProv
     );
   }
 
-  // ---------- ตัวเลือก: แผ่นหิน ----------
   Widget _buildOptionsSection() {
     final int n = _options.length;
     final double cardWidth = n >= 6 ? 52 : (n == 5 ? 62 : 80);
@@ -2212,7 +2298,7 @@ class _AlphabetGameScreenState extends State<AlphabetGameScreen> with TickerProv
                   color: isWrong ? const Color(0xFF991B1B) : const Color(0xFF6F685E),
                   offset: const Offset(0, 6),
                 ),
-                BoxShadow(color: Colors.black.withOpacity(0.25), offset: const Offset(0, 10), blurRadius: 8),
+                BoxShadow(color: Colors.black.withValues(alpha: 0.25), offset: const Offset(0, 10), blurRadius: 8),
               ],
             ),
             child: Stack(
@@ -2223,7 +2309,7 @@ class _AlphabetGameScreenState extends State<AlphabetGameScreen> with TickerProv
                   right: 10,
                   height: 8,
                   child: Container(
-                    decoration: BoxDecoration(color: Colors.white.withOpacity(0.45), borderRadius: BorderRadius.circular(8)),
+                    decoration: BoxDecoration(color: Colors.white.withValues(alpha: 0.45), borderRadius: BorderRadius.circular(8)),
                   ),
                 ),
                 Center(
@@ -2267,8 +2353,9 @@ class _RewardDialog extends StatelessWidget {
   final String letter;
   final String word;
   final String emoji;
+  final Future<GuessCoinResult> coin;
 
-  const _RewardDialog({required this.letter, required this.word, required this.emoji});
+  const _RewardDialog({required this.letter, required this.word, required this.emoji, required this.coin});
 
   @override
   Widget build(BuildContext context) {
@@ -2289,7 +2376,7 @@ class _RewardDialog extends StatelessWidget {
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
                 decoration: BoxDecoration(color: const Color(0xFFFEF08A), borderRadius: BorderRadius.circular(16)),
-                child: const Text('🎉 ยอดเยี่ยมมาก! 🎉', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900, color: Color(0xFF854D0E))),
+                child: const Text('ยอดเยี่ยมมาก', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900, color: Color(0xFF854D0E))),
               ),
               const SizedBox(height: 16),
               Text(emoji, style: const TextStyle(fontSize: 72)),
@@ -2304,6 +2391,31 @@ class _RewardDialog extends StatelessWidget {
                     TextSpan(text: word, style: const TextStyle(fontWeight: FontWeight.w900, color: Color(0xFFE11D48))),
                   ],
                 ),
+              ),
+              const SizedBox(height: 12),
+              FutureBuilder<GuessCoinResult>(
+                future: coin,
+                builder: (_, snap) {
+                  final r = snap.data;
+                  final String text = r == null
+                      ? 'กำลังรับเหรียญ...'
+                      : r.pending
+                          ? '+$kGameCoinsPerWord เหรียญ (รอต่อเน็ต)'
+                          : r.coins > 0
+                              ? '+${r.coins} เหรียญ'
+                              : r.alreadyToday
+                                  ? 'ตัวนี้ได้เหรียญไปแล้ววันนี้'
+                                  : '';
+                  if (text.isEmpty) return const SizedBox.shrink();
+                  return Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(Icons.monetization_on_rounded, color: Color(0xFFFFB627), size: 26),
+                      const SizedBox(width: 6),
+                      Text(text, style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w900, color: Color(0xFFB45309))),
+                    ],
+                  );
+                },
               ),
               const SizedBox(height: 24),
               BouncyTap(
@@ -2320,8 +2432,7 @@ class _RewardDialog extends StatelessWidget {
                   child: const Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      Text('ลุยต่อ! ', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900, color: Colors.white)),
-                      Icon(Icons.arrow_forward_rounded, color: Colors.white, size: 22),
+                      Text('ลุยต่อ', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900, color: Colors.white)),
                     ],
                   ),
                 ),
@@ -2368,7 +2479,7 @@ class _StarBurstPainter extends CustomPainter {
       final angle = (2 * pi / starCount) * i;
       final dx = origin.dx + cos(angle) * maxRadius;
       final dy = origin.dy + sin(angle) * maxRadius;
-      final paint = Paint()..color = const Color(0xFFFACC15).withOpacity(opacity);
+      final paint = Paint()..color = const Color(0xFFFACC15).withValues(alpha: opacity);
       _drawStar(canvas, Offset(dx, dy), 7 + 4 * (1 - progress), paint);
     }
   }
@@ -2396,7 +2507,6 @@ class _StarBurstPainter extends CustomPainter {
       oldDelegate.progress != progress || oldDelegate.origin != origin;
 }
 
-/// ฉากหลังป่าแสงสาด: ต้นไม้ใหญ่สองข้าง แสงส่อง พุ่มไม้ ดอกไม้ และพื้นดินด้านล่าง
 class _WorldBackdropPainter extends CustomPainter {
   final WorldTheme world;
   final Animation<double> t;
@@ -2437,7 +2547,7 @@ class _WorldBackdropPainter extends CustomPainter {
         ).createShader(rect),
     );
     final bark = Paint()
-      ..color = const Color(0xFF3A2614).withOpacity(0.5)
+      ..color = const Color(0xFF3A2614).withValues(alpha: 0.5)
       ..strokeWidth = 2.5;
     for (double y = 30; y < h; y += 46) {
       canvas.drawLine(Offset(x0 + (x1 - x0) * 0.25, y), Offset(x0 + (x1 - x0) * 0.25, y + 26), bark);
@@ -2451,7 +2561,6 @@ class _WorldBackdropPainter extends CustomPainter {
     final h = size.height;
     final rect = Offset.zero & size;
 
-    // พื้นป่า ไล่สีจากเข้ม → สว่างกลางภาพ → เข้ม
     canvas.drawRect(
       rect,
       Paint()
@@ -2463,14 +2572,13 @@ class _WorldBackdropPainter extends CustomPainter {
         ).createShader(rect),
     );
 
-    // แสงส่องลงมาจากกลางบน
     final glowC = Offset(w * 0.5, h * 0.12);
     canvas.drawCircle(
       glowC,
       w * 0.75,
       Paint()
         ..shader = RadialGradient(
-          colors: [const Color(0xFFFFF7C2).withOpacity(0.75), const Color(0xFFFFF7C2).withOpacity(0)],
+          colors: [const Color(0xFFFFF7C2).withValues(alpha: 0.75), const Color(0xFFFFF7C2).withValues(alpha: 0)],
         ).createShader(Rect.fromCircle(center: glowC, radius: w * 0.75)),
     );
     for (int i = -2; i <= 2; i++) {
@@ -2480,14 +2588,12 @@ class _WorldBackdropPainter extends CustomPainter {
         ..lineTo(w * 0.5 + i * w * 0.22 + 24, h * 0.62)
         ..lineTo(w * 0.5 + i * 8 + 14, 0)
         ..close();
-      canvas.drawPath(ray, Paint()..color = Colors.white.withOpacity(0.07));
+      canvas.drawPath(ray, Paint()..color = Colors.white.withValues(alpha: 0.07));
     }
 
-    // ต้นไม้ใหญ่สองข้าง
     _trunk(canvas, -w * 0.04, w * 0.17, h * 0.62);
     _trunk(canvas, w * 0.86, w * 1.04, h * 0.7);
 
-    // พุ่มใบไม้ด้านบน
     final top = Random(5);
     for (int i = 0; i < 12; i++) {
       final x = w * i / 11;
@@ -2495,10 +2601,9 @@ class _WorldBackdropPainter extends CustomPainter {
     }
     for (int i = 0; i < 9; i++) {
       final x = w * (i + 0.5) / 9;
-      canvas.drawCircle(Offset(x, 2 + top.nextDouble() * 10), 22 + top.nextDouble() * 18, Paint()..color = const Color(0xFF356B38).withOpacity(0.9));
+      canvas.drawCircle(Offset(x, 2 + top.nextDouble() * 10), 22 + top.nextDouble() * 18, Paint()..color = const Color(0xFF356B38).withValues(alpha: 0.9));
     }
 
-    // พื้นดินด้านล่าง
     canvas.drawOval(
       Rect.fromCenter(center: Offset(w * 0.5, h * 1.0), width: w * 1.35, height: h * 0.26),
       Paint()..color = const Color(0xFFB98A57),
@@ -2508,26 +2613,23 @@ class _WorldBackdropPainter extends CustomPainter {
       Paint()..color = const Color(0xFFD1A56E),
     );
 
-    // พุ่มไม้ + ดอกไม้
     final br = Random(11);
     _bush(canvas, Offset(w * 0.03, h * 0.46), 1.0, br);
     _bush(canvas, Offset(w * 0.97, h * 0.62), 1.2, br);
     _bush(canvas, Offset(w * 0.04, h * 0.9), 1.2, br);
     _bush(canvas, Offset(w * 0.96, h * 0.93), 1.1, br);
 
-    // ก้อนหิน
     final rockC = Offset(w * 0.9, h * 0.88);
     canvas.drawOval(Rect.fromCenter(center: rockC, width: 70, height: 38), Paint()..color = const Color(0xFF8C8F8A));
     canvas.drawOval(Rect.fromCenter(center: rockC + const Offset(-6, -6), width: 50, height: 22), Paint()..color = const Color(0xFFB4B7B0));
 
-    // ประกายหิ่งห้อย
     final rnd = Random(7);
     for (int i = 0; i < 18; i++) {
       final x = rnd.nextDouble() * w;
       final y = rnd.nextDouble() * h * 0.8;
       final r = 1.4 + rnd.nextDouble() * 2.0;
       final tw = 0.3 + 0.7 * sin((t.value * 2 + i * 0.17) * pi).abs();
-      canvas.drawCircle(Offset(x, y), r, Paint()..color = const Color(0xFFFFF59D).withOpacity(0.8 * tw));
+      canvas.drawCircle(Offset(x, y), r, Paint()..color = const Color(0xFFFFF59D).withValues(alpha: 0.8 * tw));
     }
   }
 
@@ -2535,67 +2637,6 @@ class _WorldBackdropPainter extends CustomPainter {
   bool shouldRepaint(covariant _WorldBackdropPainter oldDelegate) => oldDelegate.world != world;
 }
 
-/// หีบสมบัติเล็กมุมขวาบน (เหรียญ/ดาวลอยเหนือหีบ)
-class _TreasureChestPainter extends CustomPainter {
-  const _TreasureChestPainter();
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final outline = Paint()
-      ..color = const Color(0xFF4A2B12)
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 2.2
-      ..strokeJoin = StrokeJoin.round;
-
-    // เหรียญและดาวที่ลอยอยู่
-    final gold = Paint()..color = const Color(0xFFFFC83D);
-    canvas.drawCircle(const Offset(22, 12), 9, gold);
-    canvas.drawCircle(const Offset(22, 12), 9, Paint()..color = const Color(0xFFB8860B)..style = PaintingStyle.stroke..strokeWidth = 1.6);
-    canvas.drawCircle(const Offset(22, 12), 5, Paint()..color = const Color(0xFFFFE08A));
-    canvas.drawCircle(const Offset(44, 10), 10, gold);
-    canvas.drawCircle(const Offset(44, 10), 10, Paint()..color = const Color(0xFFB8860B)..style = PaintingStyle.stroke..strokeWidth = 1.6);
-    final star = Path();
-    for (int i = 0; i < 10; i++) {
-      final a = (pi / 5) * i - pi / 2;
-      final rr = i.isEven ? 6.0 : 2.8;
-      final p = Offset(44 + cos(a) * rr, 10 + sin(a) * rr);
-      if (i == 0) {
-        star.moveTo(p.dx, p.dy);
-      } else {
-        star.lineTo(p.dx, p.dy);
-      }
-    }
-    star.close();
-    canvas.drawPath(star, Paint()..color = const Color(0xFFFFF3B0));
-
-    // ตัวหีบ
-    final body = RRect.fromRectAndRadius(Rect.fromLTWH(6, 30, 56, 24), const Radius.circular(4));
-    canvas.drawRRect(body, Paint()..color = const Color(0xFFB5651D));
-    final lid = Path()
-      ..moveTo(5, 32)
-      ..quadraticBezierTo(5, 16, 34, 16)
-      ..quadraticBezierTo(63, 16, 63, 32)
-      ..close();
-    canvas.drawPath(lid, Paint()..color = const Color(0xFFC9772B));
-    // แถบทอง
-    final band = Paint()..color = const Color(0xFFFFC83D);
-    canvas.drawRect(Rect.fromLTWH(16, 18, 6, 36), band);
-    canvas.drawRect(Rect.fromLTWH(46, 18, 6, 36), band);
-    canvas.drawRRect(body, outline);
-    canvas.drawPath(lid, outline);
-    // ล็อก
-    canvas.drawRRect(
-      RRect.fromRectAndRadius(Rect.fromLTWH(29, 28, 10, 11), const Radius.circular(2)),
-      Paint()..color = const Color(0xFFFFD84D),
-    );
-    canvas.drawCircle(const Offset(34, 33), 1.8, Paint()..color = const Color(0xFF4A2B12));
-  }
-
-  @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
-}
-
-/// ทางเดินดินคดเคี้ยวขอบเถาวัลย์ + น้องงู (START) + ถ้วยรางวัล (FINISH)
 class SnakeBodyPainter extends CustomPainter {
   final List<Rect> cellRects;
   final Animation<double> blink;
@@ -2654,14 +2695,12 @@ class SnakeBodyPainter extends CustomPainter {
       ..strokeCap = StrokeCap.round
       ..strokeJoin = StrokeJoin.round;
 
-    // เงา + เถาวัลย์ขอบทาง + ดิน
     canvas.drawPath(path.shift(const Offset(0, 5)), stroke(const Color(0x55000000), 60));
     canvas.drawPath(path, stroke(const Color(0xFF3F7A2C), 60));
     canvas.drawPath(path, stroke(const Color(0xFF7A5430), 54));
     canvas.drawPath(path, stroke(const Color(0xFFCFA56F), 49));
     canvas.drawPath(path, stroke(const Color(0xFFE2C18E), 34));
 
-    // ดอกไม้ + ใบไม้ตามขอบทาง
     const petals = [Color(0xFFFFFFFF), Color(0xFFFF8FB1), Color(0xFFFFE066), Color(0xFFFFFFFF)];
     final rnd = Random(3);
     for (final m in path.computeMetrics()) {
@@ -2687,18 +2726,17 @@ class SnakeBodyPainter extends CustomPainter {
       }
     }
 
-    // START: น้องงู + ธง
+    // START: งูอยู่นิ่งตรงจุดเริ่มต้น
     final first = cellRects.first;
     final hc = Offset(first.left - 18, first.center.dy - 2);
     canvas.drawOval(
       Rect.fromCenter(center: hc + const Offset(0, 24), width: 46, height: 10),
       Paint()..color = Colors.black26,
     );
-    final bob = sin(blink.value * pi * 2 * 3) * 1.6;
-    _emoji(canvas, '🐍', hc + Offset(0, bob), 46);
-    _label(canvas, 'START 🚩', Offset(hc.dx - 28, hc.dy + 25), Colors.white, fontSize: 10.5);
+    _emoji(canvas, '🐍', hc, 46);
+    _label(canvas, 'START', Offset(hc.dx - 28, hc.dy + 25), Colors.white, fontSize: 10.5);
 
-    // FINISH: ถ้วยรางวัล + ทานตะวัน
+    // FINISH: ถ้วยรางวัล
     final last = cellRects.last;
     _label(canvas, '🏆 FINISH', Offset(last.right - 6, last.top - 18), Colors.white, fontSize: 10.5);
     _emoji(canvas, '🌻', Offset(last.right + 8, last.center.dy - 16), 24);
@@ -2711,89 +2749,6 @@ class SnakeBodyPainter extends CustomPainter {
       oldDelegate.cellRects != cellRects || oldDelegate.world != world;
 }
 
-
-// ---------------------------------------------------------------
-// ป้ายแสดงเหรียญ (UI อย่างเดียว ไม่มีระบบเก็บเหรียญ)
-// ---------------------------------------------------------------
-class _CoinPill extends StatelessWidget {
-  final int coins;
-  final Color color;
-  final double fontSize;
-
-  const _CoinPill({
-    // ignore: unused_element_parameter
-    this.coins = 0,
-    // ignore: unused_element_parameter
-    this.color = const Color(0xFFB45309),
-    this.fontSize = 15,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final double fs = fontSize;
-    return Container(
-      padding: EdgeInsets.symmetric(horizontal: fs * 0.7, vertical: fs * 0.3),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(fs * 1.6),
-        border: Border.all(color: const Color(0xFFFFD43B), width: 2),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.12),
-            blurRadius: 6,
-            offset: const Offset(0, 2),
-          ),
-        ],
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(
-            Icons.monetization_on_rounded,
-            color: const Color(0xFFFFB627),
-            size: fs * 1.45,
-          ),
-          SizedBox(width: fs * 0.35),
-          Text(
-            '$coins',
-            style: TextStyle(
-              fontSize: fs,
-              fontWeight: FontWeight.w900,
-              color: color,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _CoinPillBar extends StatelessWidget {
-  final EdgeInsetsGeometry padding;
-  final double fontSize;
-
-  const _CoinPillBar({
-    this.padding = const EdgeInsets.only(bottom: 8),
-    // ignore: unused_element_parameter
-    this.fontSize = 14,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Align(
-      alignment: Alignment.centerRight,
-      child: Padding(
-        padding: padding,
-        child: _CoinPill(fontSize: fontSize),
-      ),
-    );
-  }
-}
-
-
-// ---------------------------------------------------------------
-// แถบหัวเรื่องด้านบนของเกม (ปุ่มย้อนกลับ + ชื่อเกม บนพื้นสีประจำเกม)
-// ---------------------------------------------------------------
 class _GameHeaderBar extends StatelessWidget {
   final String title;
   final Color color;
@@ -2816,50 +2771,50 @@ class _GameHeaderBar extends StatelessWidget {
         statusBarBrightness: Brightness.dark,
       ),
       child: AnimatedContainer(
-      duration: const Duration(milliseconds: 400),
-      color: color,
-      child: SafeArea(
-        bottom: false,
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-          child: Row(
-            children: [
-              if (showBack)
-                InkWell(
-                  borderRadius: BorderRadius.circular(10),
-                  onTap: onBack ?? () => Navigator.maybePop(context),
-                  child: const Padding(
-                    padding: EdgeInsets.all(6),
-                    child: Icon(
-                      Icons.arrow_back_ios_new_rounded,
-                      color: Colors.white,
-                      size: 22,
+        duration: const Duration(milliseconds: 400),
+        color: color,
+        child: SafeArea(
+          bottom: false,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+            child: Row(
+              children: [
+                if (showBack)
+                  InkWell(
+                    borderRadius: BorderRadius.circular(10),
+                    onTap: onBack ?? () => Navigator.maybePop(context),
+                    child: const Padding(
+                      padding: EdgeInsets.all(6),
+                      child: Icon(
+                        Icons.arrow_back_ios_new_rounded,
+                        color: Colors.white,
+                        size: 22,
+                      ),
                     ),
-                  ),
-                )
-              else
-                const SizedBox(width: 34),
-              Expanded(
-                child: FittedBox(
-                  fit: BoxFit.scaleDown,
-                  child: Text(
-                    title,
-                    maxLines: 1,
-                    textAlign: TextAlign.center,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 25,
-                      fontWeight: FontWeight.w900,
-                      letterSpacing: 0.5,
+                  )
+                else
+                  const SizedBox(width: 34),
+                Expanded(
+                  child: FittedBox(
+                    fit: BoxFit.scaleDown,
+                    child: Text(
+                      title,
+                      maxLines: 1,
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 25,
+                        fontWeight: FontWeight.w900,
+                        letterSpacing: 0.5,
+                      ),
                     ),
                   ),
                 ),
-              ),
-              const SizedBox(width: 44),
-            ],
+                const SizedBox(width: 44),
+              ],
+            ),
           ),
         ),
-      ),
       ),
     );
   }
